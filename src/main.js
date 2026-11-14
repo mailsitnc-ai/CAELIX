@@ -1,15 +1,16 @@
 'use strict';
 
 const {
-  app, BrowserWindow, ipcMain, dialog, Menu, nativeImage, shell, safeStorage,
+  app, BrowserWindow, ipcMain, dialog, Menu, nativeImage, shell, safeStorage, Notification,
 } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const crypto = require('crypto');
+const { execFile } = require('child_process');
 const { KeyStore, SessionStore, SettingsStore } = require('./store');
 const { Engine } = require('./engine');
-const { providerList, testKey, PROVIDERS } = require('./engine/providers');
+const { providerList, testKey, fetchProviderModels, PROVIDERS } = require('./engine/providers');
 
 const PROCESS_STARTED = Date.now();
 const APP_NAME = 'CAELIX';
@@ -43,6 +44,70 @@ const pendingQuestions = new Map();
 
 function emit(event) {
   if (win && !win.isDestroyed()) win.webContents.send('chat:event', event);
+  if (event?.type === 'done' && !SELF_CHECK && win && !win.isDestroyed() && !win.isFocused()
+    && (event.elapsedMs || 0) >= 5000 && Notification.isSupported()) {
+    try {
+      new Notification({ title: APP_NAME, body: event.error ? `Turn failed: ${event.error}` : 'Reply finished.' }).show();
+    } catch { /* best effort */ }
+  }
+}
+
+const IMAGE_EXT_MIME = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+};
+
+function readAttachmentFile(filePath, baseDir) {
+  const resolved = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(baseDir || projectPath(), filePath);
+  const stat = fs.statSync(resolved);
+  if (!stat.isFile()) throw new Error('Only files can be attached.');
+  const ext = path.extname(resolved).toLowerCase();
+  const name = baseDir && resolved.startsWith(`${path.resolve(baseDir)}${path.sep}`)
+    ? path.relative(path.resolve(baseDir), resolved)
+    : path.basename(resolved);
+  if (IMAGE_EXT_MIME[ext]) {
+    if (stat.size > 1_500_000) throw new Error('Image attachment exceeds 1.5 MB.');
+    const buf = fs.readFileSync(resolved);
+    return {
+      name,
+      kind: 'image',
+      mimeType: IMAGE_EXT_MIME[ext],
+      bytes: stat.size,
+      dataUrl: `data:${IMAGE_EXT_MIME[ext]};base64,${buf.toString('base64')}`,
+    };
+  }
+  if (stat.size > 256_000) throw new Error('Text attachment exceeds 256 KB.');
+  const buf = fs.readFileSync(resolved);
+  if (buf.includes(0)) throw new Error('Binary files cannot be attached as text.');
+  return {
+    name,
+    kind: 'text',
+    bytes: stat.size,
+    text: buf.toString('utf8').slice(0, 32_000),
+  };
+}
+
+function listProjectFiles(rootDir, limit = 300) {
+  const root = path.resolve(rootDir);
+  const out = [];
+  const skip = new Set(['.git', 'node_modules', 'dist', '.next', '.venv']);
+  const walkDir = (dir) => {
+    if (out.length >= limit) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (out.length >= limit) return;
+      if (skip.has(entry.name)) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walkDir(full);
+      else if (entry.isFile()) out.push(path.relative(root, full));
+    }
+  };
+  walkDir(root);
+  return out;
 }
 
 function userData() {
@@ -249,6 +314,68 @@ function registerIpc() {
 
   ipcMain.handle('providers:list', () => providerList(SELF_CHECK));
 
+  ipcMain.handle('providers:refresh', async (_event, { provider } = {}) => {
+    const models = await fetchProviderModels(provider, keys.get(provider));
+    return { provider, models };
+  });
+
+  ipcMain.handle('settings:get', () => ({
+    theme: settings.get('theme', 'dark'),
+    viewMode: settings.get('viewMode', 'normal'),
+  }));
+
+  ipcMain.handle('settings:set', (_event, patch = {}) => {
+    if (patch.theme === 'dark' || patch.theme === 'light') settings.set('theme', patch.theme);
+    if (patch.viewMode === 'normal' || patch.viewMode === 'verbose') settings.set('viewMode', patch.viewMode);
+    return {
+      theme: settings.get('theme', 'dark'),
+      viewMode: settings.get('viewMode', 'normal'),
+    };
+  });
+
+  ipcMain.handle('git:branch', (_event, { cwd } = {}) => new Promise((resolve) => {
+    const dir = path.resolve(cwd || projectPath());
+    execFile('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: dir, timeout: 1500 }, (err, stdout) => {
+      resolve({ branch: err ? null : String(stdout || '').trim() || null });
+    });
+  }));
+
+  ipcMain.handle('system:prompt', (_event, { sessionId } = {}) => {
+    const session = sessions.get(sessionId);
+    if (!session) return null;
+    const prompt = engine.systemPrompt(session);
+    return {
+      prompt,
+      chars: prompt.length,
+      tokens: Math.max(1, Math.round(prompt.length / 4)),
+    };
+  });
+
+  ipcMain.handle('files:list', (_event, { cwd } = {}) => listProjectFiles(cwd || projectPath()));
+
+  ipcMain.handle('files:pick', async (_event, { cwd } = {}) => {
+    const result = await dialog.showOpenDialog(win, {
+      title: 'Attach files',
+      defaultPath: cwd || projectPath(),
+      properties: ['openFile', 'multiSelections'],
+    });
+    if (result.canceled || !result.filePaths.length) return [];
+    const items = [];
+    for (const filePath of result.filePaths.slice(0, 5)) {
+      items.push(readAttachmentFile(filePath, cwd || projectPath()));
+    }
+    return items;
+  });
+
+  ipcMain.handle('files:read-attachment', (_event, { filePath, cwd } = {}) => {
+    const base = path.resolve(cwd || projectPath());
+    const target = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(base, filePath);
+    if (!path.isAbsolute(filePath) && target !== base && !target.startsWith(`${base}${path.sep}`)) {
+      throw new Error('Attached project file must stay inside the project.');
+    }
+    return readAttachmentFile(target, base);
+  });
+
   ipcMain.handle('keys:status', () => {
     const mask = new Map(keys.status().map((row) => [row.provider, row]));
     return providerList(SELF_CHECK).map((provider) => ({
@@ -335,7 +462,7 @@ function registerIpc() {
     return folder;
   });
 
-  ipcMain.handle('chat:send', async (_event, { sessionId, text }) => {
+  ipcMain.handle('chat:send', async (_event, { sessionId, text, attachments } = {}) => {
     const session = sessions.get(sessionId);
     if (!session) throw new Error('No such chat.');
     if (session.title === 'New chat' && String(text).trim()) {
@@ -343,7 +470,7 @@ function registerIpc() {
       sessions.rename(sessionId, title);
       emit({ type: 'session-updated', session: sessionSummary(sessions.get(sessionId)) });
     }
-    engine.send(sessionId, text).catch((error) => {
+    engine.send(sessionId, text, attachments).catch((error) => {
       emit({ type: 'error', message: error.message });
     });
     return { started: true };

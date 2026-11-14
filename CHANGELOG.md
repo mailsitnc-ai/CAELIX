@@ -1,5 +1,12 @@
 # CAELIX changelog
 
+## 0.1.7 — full 19-tool harness, multimodal inputs, themes and keyboard shortcuts
+
+- Added `web_search`, `notebook_edit` (`.ipynb` cell replace/insert/delete), `skill` (`SKILLS.md` / `.agents/skills/*/SKILL.md` / `CAELIX.md`), and base64 image reading in `read_file` with multimodal provider forwarding and hidden internal image carrier messages (19 tools total).
+- Added live model catalog refresh (`providers:refresh`), composer file/image attachments (`files:pick`, drag-and-drop), `@` file mention autocomplete, live `TodoWrite` checklist bar, system prompt inspector in the Context tab, missing-key composer gate, status strip (project folder, git branch, context %, token/duration telemetry), and completion notifications when unfocused.
+- Added bypass-mode safety banner, Normal/Verbose view toggle (`Ctrl+O`), dark/light theme toggle (`html[data-theme="light"]`), keyboard shortcuts (`Cmd+N`, `Cmd+\`, `Cmd+B`, `Cmd+K`, `Ctrl+O`, `` Ctrl+` ``, `Esc`), and multi-round live assistant bubble splitting so streamed post-tool text matches persisted transcript order.
+- Extended self-check to 21 steps covering every new harness and UI capability.
+
 ## 0.1.6 — macOS app bundle and Desktop shortcut
 
 - Added `npm run package` (`scripts/package.js`) to build a signed-ready `dist/CAELIX.app` with CAELIX's executable, `Info.plist`, `caelix.icns` icon, and symlink-preserved Electron frameworks, stripping leftover `electron.icns` and `ElectronAsarIntegrity` metadata.

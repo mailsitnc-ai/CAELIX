@@ -39,6 +39,16 @@ const state = {
   checkpoints: [],
   terminalTabs: [],
   activeTerminalId: null,
+  theme: 'dark',
+  viewMode: 'normal',
+  gitBranch: null,
+  attachments: [],
+  projectFiles: null,
+  mentionQuery: null,
+  mentionMatches: [],
+  mentionIndex: 0,
+  lastUsageText: '',
+  promptOpen: false,
 };
 
 const MODES = [
@@ -51,6 +61,7 @@ const MODES = [
 const TOOL_LABELS = {
   read_file: 'Read', write_file: 'Write', edit_file: 'Edit', list_dir: 'List',
   glob: 'Glob', grep: 'Grep', bash: 'Terminal', todo_write: 'Tasks', web_fetch: 'Fetch',
+  web_search: 'Search', notebook_edit: 'Notebook', skill: 'Skill',
   multi_edit: 'Multi-edit', task_start: 'Task', task_list: 'Tasks', task_stop: 'Stop task',
   ask_user: 'Question', present_plan: 'Plan', subagent: 'Subagent',
 };
@@ -261,6 +272,111 @@ function renderChips() {
   $('#project-name').textContent = displayProject(state.project || session.cwd);
   $('#side-project-name').textContent = state.project || session.cwd;
   $('#chat-title').textContent = session.title || 'New chat';
+  renderBypassWarning();
+  renderComposerState();
+  renderStatusStrip();
+}
+
+function renderBypassWarning() {
+  const banner = $('#bypass-banner');
+  if (!banner) return;
+  banner.classList.toggle('hidden', state.session?.mode !== 'bypass');
+}
+
+function renderTodos(items = state.session?.todos) {
+  const bar = $('#todo-bar');
+  if (!bar) return;
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) {
+    bar.classList.add('hidden');
+    bar.innerHTML = '';
+    return;
+  }
+  const done = list.filter((item) => item.status === 'completed').length;
+  const mark = { completed: '✓', in_progress: '●', pending: '○' };
+  bar.classList.remove('hidden');
+  bar.innerHTML = `
+    <div class="todo-head"><span>Tasks</span><span>${done}/${list.length} done</span></div>
+    <div class="todo-items">${list.map((item) => `<div class="todo-item ${escapeHtml(item.status || 'pending')}"><span class="todo-mark">${mark[item.status] || '○'}</span><span>${escapeHtml(item.content)}</span></div>`).join('')}</div>`;
+}
+
+function renderComposerState() {
+  const session = state.session;
+  const warning = $('#key-warning');
+  const sendBtn = $('#send-btn');
+  if (!session || !warning || !sendBtn) return;
+  const provider = state.providers.find((item) => item.id === session.provider);
+  const keyInfo = state.keys.find((item) => item.id === session.provider);
+  const missingKey = Boolean(provider && !provider.keyless && (!keyInfo || !keyInfo.configured));
+  const missingModel = !session.model;
+  if (missingKey) {
+    $('#key-warning-text').textContent = `Add a ${provider.name} key in Keys or pick a keyless model to send.`;
+    warning.classList.remove('hidden');
+  } else if (missingModel) {
+    $('#key-warning-text').textContent = 'Choose a model before sending.';
+    warning.classList.remove('hidden');
+  } else {
+    warning.classList.add('hidden');
+  }
+  sendBtn.disabled = missingKey || missingModel;
+}
+
+function renderStatusStrip() {
+  const folder = $('#strip-folder');
+  const branch = $('#strip-branch');
+  const ctx = $('#strip-context');
+  const usage = $('#strip-usage');
+  if (folder) folder.textContent = displayProject(state.project || state.session?.cwd);
+  if (branch) {
+    if (state.gitBranch) {
+      branch.textContent = state.gitBranch;
+      branch.classList.remove('hidden');
+    } else {
+      branch.classList.add('hidden');
+    }
+  }
+  if (ctx) {
+    const pct = state.contextReport ? `${state.contextReport.percent}%` : '0%';
+    ctx.textContent = `${pct} context`;
+  }
+  if (usage) {
+    usage.textContent = state.streaming
+      ? 'Streaming reply…'
+      : state.lastUsageText || 'CAELIX can make mistakes. Review changes.';
+  }
+}
+
+async function refreshGitBranch() {
+  try {
+    const res = await api.invoke('git:branch', { cwd: state.project || state.session?.cwd });
+    state.gitBranch = res?.branch || null;
+  } catch {
+    state.gitBranch = null;
+  }
+  renderStatusStrip();
+}
+
+function renderAttachments() {
+  const list = $('#attachment-list');
+  if (!list) return;
+  if (!state.attachments.length) {
+    list.classList.add('hidden');
+    list.innerHTML = '';
+    return;
+  }
+  list.classList.remove('hidden');
+  list.innerHTML = state.attachments.map((item, idx) => `
+    <span class="att-chip">
+      ${item.kind === 'image' && item.dataUrl ? `<img class="att-thumb" src="${item.dataUrl}" alt="">` : ''}
+      <span>${escapeHtml(item.name)}</span>
+      <button type="button" class="att-remove" data-att-idx="${idx}" aria-label="Remove attachment">×</button>
+    </span>`).join('');
+  for (const btn of $$('.att-remove', list)) {
+    btn.addEventListener('click', () => {
+      state.attachments.splice(Number(btn.dataset.attIdx), 1);
+      renderAttachments();
+    });
+  }
 }
 
 function renderEmpty() {
@@ -290,7 +406,7 @@ function toolCard(options) {
     id, name, input, status = 'running', output = '', durationMs = null, ok = null,
   } = options;
   const card = document.createElement('div');
-  card.className = 'tool-card';
+  card.className = `tool-card${state.viewMode === 'verbose' ? ' expanded' : ''}`;
   card.id = `tool-${id}`;
   const target = input?.path || input?.command || input?.pattern || input?.url || input?.items?.length || '';
   const label = TOOL_LABELS[name] || name;
@@ -340,11 +456,14 @@ function renderTranscript() {
     if (message.role === 'tool') results.set(message.toolCallId, message);
   }
   for (const message of session.messages) {
-    if (message.role === 'tool') continue;
+    if (message.role === 'tool' || message.hidden) continue;
     if (message.role === 'user') {
       const node = document.createElement('div');
       node.className = 'msg user';
-      node.innerHTML = `<div class="bubble">${escapeHtml(message.content)}</div>`;
+      const atts = Array.isArray(message.attachments) && message.attachments.length
+        ? `<div class="msg-attachments">${message.attachments.map((att) => `<span class="msg-att">${escapeHtml(att.name)}</span>`).join('')}</div>`
+        : '';
+      node.innerHTML = `<div class="bubble">${atts}${escapeHtml(message.content)}</div>`;
       transcript.appendChild(node);
       continue;
     }
@@ -425,6 +544,24 @@ function renderContext() {
         </div>`).join('')}
     </div>
     <div class="context-foot">${report.messages} saved message(s) in this chat.</div>`;
+  if (state.promptOpen) loadPromptInspector().catch(() => {});
+}
+
+async function loadPromptInspector() {
+  const pre = $('#prompt-inspector');
+  if (!pre || !state.session) return;
+  const data = await api.invoke('system:prompt', { sessionId: state.session.id });
+  pre.textContent = data ? `${data.prompt}\n\n[${data.tokens.toLocaleString()} est. tokens · ${data.chars.toLocaleString()} chars]` : 'No active chat.';
+}
+
+async function togglePromptInspector() {
+  state.promptOpen = !state.promptOpen;
+  const pre = $('#prompt-inspector');
+  const btn = $('#prompt-inspector-btn');
+  if (!pre || !btn) return;
+  pre.classList.toggle('hidden', !state.promptOpen);
+  btn.textContent = state.promptOpen ? 'Hide system prompt' : 'Inspect system prompt';
+  if (state.promptOpen) await loadPromptInspector();
 }
 
 function renderCheckpoints() {
@@ -654,6 +791,7 @@ function renderKeys() {
 async function refreshKeys() {
   state.keys = await api.invoke('keys:status');
   renderKeys();
+  renderComposerState();
 }
 
 async function refreshSessions() {
@@ -665,12 +803,15 @@ async function refreshSessions() {
 
 function renderAll() {
   renderChips();
+  renderTodos();
+  renderAttachments();
   renderTranscript();
   renderChanges();
   renderTerminal();
   renderContext();
   renderCheckpoints();
   renderSessions();
+  renderStatusStrip();
 }
 
 async function openSession(id) {
@@ -681,6 +822,8 @@ async function openSession(id) {
   state.changes = (session.changes || []).filter((change) => change.file);
   state.terminal = session.terminal || [];
   state.project = session.cwd;
+  state.projectFiles = null;
+  state.lastUsageText = '';
   try {
     state.contextReport = await api.invoke('context:get', { sessionId: id });
   } catch {
@@ -689,6 +832,7 @@ async function openSession(id) {
   await loadCheckpoints();
   await loadTerminalTabs();
   await api.invoke('sessions:set-active', id);
+  refreshGitBranch();
   renderAll();
   scrollToBottom(true);
 }
@@ -708,9 +852,12 @@ async function newChat() {
   state.checkpoints = [];
   state.terminalTabs = [];
   state.activeTerminalId = null;
+  state.attachments = [];
+  state.lastUsageText = '';
   await refreshSessions();
   renderAll();
   await loadTerminalTabs();
+  refreshGitBranch();
   $('#prompt').focus();
 }
 
@@ -725,6 +872,7 @@ function setStreaming(value) {
   $('#send-btn').classList.toggle('hidden', value);
   $('#stop-btn').classList.toggle('hidden', !value);
   $('#stream-status').textContent = value ? 'Streaming…' : '';
+  renderStatusStrip();
 }
 
 function ensureLiveAssistant() {
@@ -853,6 +1001,15 @@ function onChatEvent(event) {
       break;
     case 'text': {
       if (!state.firstWordAt) state.firstWordAt = performance.now();
+      if (state.currentAssistant?.hasTools) {
+        if (state.liveRaf) {
+          cancelAnimationFrame(state.liveRaf);
+          state.liveRaf = 0;
+        }
+        state.currentAssistant.md.innerHTML = state.liveText ? renderMarkdown(state.liveText) : '';
+        state.currentAssistant = null;
+        state.liveText = '';
+      }
       ensureLiveAssistant();
       state.liveText += event.delta;
       scheduleLivePaint();
@@ -860,6 +1017,7 @@ function onChatEvent(event) {
     }
     case 'tool-start': {
       ensureLiveAssistant();
+      state.currentAssistant.hasTools = true;
       if (state.currentAssistant.md.querySelector('.typing')) {
         state.currentAssistant.md.innerHTML = renderMarkdown(state.liveText);
       }
@@ -906,10 +1064,13 @@ function onChatEvent(event) {
       renderTerminal();
       break;
     case 'todos':
+      if (state.session) state.session.todos = event.items || [];
+      renderTodos(event.items || []);
       break;
     case 'context':
       state.contextReport = event.report;
       renderContext();
+      renderStatusStrip();
       if (event.compacted) toast(`Compacted ${event.compacted} older message(s) to fit the context window.`);
       break;
     case 'checkpoint':
@@ -928,10 +1089,14 @@ function onChatEvent(event) {
       if (event.compacted) toast(`Compacted ${event.compacted} older message(s) to fit the context window.`);
       if (state.currentAssistant) {
         if (!state.liveText) state.currentAssistant.md.innerHTML = '';
-        const status = $('#stream-status');
-        const tokens = event.usage?.total_tokens;
-        status.textContent = tokens ? `${tokens} tokens · ${((event.elapsedMs || 0) / 1000).toFixed(1)}s` : '';
       }
+      {
+        const tokens = event.usage?.total_tokens || event.estimatedTokens;
+        const sec = ((event.elapsedMs || 0) / 1000).toFixed(1);
+        state.lastUsageText = tokens ? `${tokens} tokens · ${sec}s` : `${sec}s`;
+        $('#stream-status').textContent = state.lastUsageText;
+      }
+      renderStatusStrip();
       state.currentAssistant = null;
       state.liveText = '';
       refreshSessions();
@@ -963,26 +1128,37 @@ function onChatEvent(event) {
 async function sendMessage() {
   const prompt = $('#prompt');
   const text = prompt.value.trim();
-  if (!text || state.streaming || !state.session) return;
+  const attachments = state.attachments.slice();
+  if ((!text && !attachments.length) || state.streaming || !state.session) return;
+  if ($('#send-btn').disabled) {
+    openKeys();
+    return;
+  }
+  hideMentions();
   prompt.value = '';
+  state.attachments = [];
+  renderAttachments();
   resizePrompt();
   state.sendStartedAt = performance.now();
   state.firstWordAt = null;
   state.liveText = '';
   state.currentAssistant = null;
   state.session.messages = state.session.messages || [];
-  state.session.messages.push({ role: 'user', content: text });
+  state.session.messages.push({ role: 'user', content: text, attachments });
   const current = $('#transcript');
   if ($('.empty-state', current)) current.innerHTML = '';
   const node = document.createElement('div');
   node.className = 'msg user';
-  node.innerHTML = `<div class="bubble">${escapeHtml(text)}</div>`;
+  const atts = attachments.length
+    ? `<div class="msg-attachments">${attachments.map((att) => `<span class="msg-att">${escapeHtml(att.name)}</span>`).join('')}</div>`
+    : '';
+  node.innerHTML = `<div class="bubble">${atts}${escapeHtml(text)}</div>`;
   current.appendChild(node);
   scrollToBottom(true);
   setStreaming(true);
   ensureLiveAssistant();
   try {
-    await api.invoke('chat:send', { sessionId: state.session.id, text });
+    await api.invoke('chat:send', { sessionId: state.session.id, text, attachments });
   } catch (error) {
     setStreaming(false);
     appendError(error.message);
@@ -1063,7 +1239,7 @@ async function saveMemory() {
 function renderModelMenu(filter = '') {
   const menu = $('#model-menu');
   const query = filter.trim().toLowerCase();
-  const chunks = [`<input class="pop-search" id="model-search" placeholder="Search models" value="${escapeHtml(filter)}">`];
+  const chunks = [`<div class="pop-head-row"><input class="pop-search" id="model-search" placeholder="Search models" value="${escapeHtml(filter)}"><button id="model-refresh" class="pop-refresh" type="button" title="Refresh models from current provider">Refresh</button></div>`];
   for (const provider of state.providers) {
     const models = provider.models.filter((model) => !query || model.toLowerCase().includes(query) || provider.name.toLowerCase().includes(query));
     if (!models.length) continue;
@@ -1080,6 +1256,23 @@ function renderModelMenu(filter = '') {
     search.addEventListener('input', () => renderModelMenu(search.value));
     search.focus();
   }
+  $('#model-refresh')?.addEventListener('click', async () => {
+    const pid = state.session?.provider || 'gemini';
+    const btn = $('#model-refresh');
+    btn.textContent = '…';
+    btn.disabled = true;
+    try {
+      const res = await api.invoke('providers:refresh', { provider: pid });
+      const target = state.providers.find((item) => item.id === pid);
+      if (target && Array.isArray(res?.models)) target.models = res.models;
+      renderModelMenu($('#model-search')?.value || '');
+      toast(`Updated ${pid} model list.`);
+    } catch (error) {
+      toast(error.message);
+      btn.textContent = 'Refresh';
+      btn.disabled = false;
+    }
+  });
   for (const item of $$('.pop-item', menu)) {
     item.addEventListener('click', async () => {
       await chooseModel(item.dataset.provider, item.dataset.model);
@@ -1101,6 +1294,97 @@ async function chooseModel(provider, model) {
   state.session.model = model;
   renderChips();
   renderModelMenu();
+}
+
+function applyTheme(theme) {
+  state.theme = theme === 'light' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', state.theme);
+  const btn = $('#theme-btn');
+  if (btn) btn.title = state.theme === 'light' ? 'Switch to dark appearance' : 'Switch to light appearance';
+}
+
+function applyViewMode(viewMode) {
+  state.viewMode = viewMode === 'verbose' ? 'verbose' : 'normal';
+  const btn = $('#view-mode-btn');
+  if (btn) btn.textContent = state.viewMode === 'verbose' ? 'Verbose' : 'Normal';
+  for (const card of $$('.tool-card')) {
+    card.classList.toggle('expanded', state.viewMode === 'verbose');
+  }
+}
+
+function hideMentions() {
+  state.mentionQuery = null;
+  state.mentionMatches = [];
+  $('#mention-menu')?.classList.add('hidden');
+}
+
+async function updateMentions() {
+  const prompt = $('#prompt');
+  const menu = $('#mention-menu');
+  if (!prompt || !menu) return;
+  const cursor = prompt.selectionStart || 0;
+  const before = prompt.value.slice(0, cursor);
+  const match = before.match(/(?:^|\s)@([^\s]*)$/);
+  if (!match) {
+    hideMentions();
+    return;
+  }
+  const query = match[1].toLowerCase();
+  if (!state.projectFiles) {
+    try {
+      state.projectFiles = await api.invoke('files:list', { cwd: state.project });
+    } catch {
+      state.projectFiles = [];
+    }
+  }
+  const matches = state.projectFiles.filter((file) => file.toLowerCase().includes(query)).slice(0, 12);
+  if (!matches.length) {
+    hideMentions();
+    return;
+  }
+  state.mentionQuery = match[1];
+  state.mentionMatches = matches;
+  state.mentionIndex = 0;
+  menu.innerHTML = matches.map((file, idx) => `<button type="button" class="mention-item${idx === 0 ? ' active' : ''}" data-mention="${escapeHtml(file)}">${escapeHtml(file)}</button>`).join('');
+  menu.classList.remove('hidden');
+  for (const item of $$('.mention-item', menu)) {
+    item.addEventListener('click', () => selectMention(item.dataset.mention));
+  }
+}
+
+async function selectMention(file) {
+  const prompt = $('#prompt');
+  const cursor = prompt.selectionStart || prompt.value.length;
+  const before = prompt.value.slice(0, cursor).replace(/@([^\s]*)$/, `@${file} `);
+  prompt.value = before + prompt.value.slice(cursor);
+  hideMentions();
+  resizePrompt();
+  prompt.focus();
+  if (!state.attachments.some((item) => item.name === file)) {
+    try {
+      const att = await api.invoke('files:read-attachment', { filePath: file, cwd: state.project });
+      if (att) {
+        state.attachments.push(att);
+        renderAttachments();
+      }
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+}
+
+async function attachPickedFiles() {
+  try {
+    const items = await api.invoke('files:pick', { cwd: state.project });
+    for (const item of items || []) {
+      if (!state.attachments.some((existing) => existing.name === item.name)) {
+        state.attachments.push(item);
+      }
+    }
+    renderAttachments();
+  } catch (error) {
+    toast(error.message);
+  }
 }
 
 function renderModeMenu() {
@@ -1168,8 +1452,36 @@ function bind() {
     $('#stream-status').textContent = 'Stopping…';
     await api.invoke('chat:stop', state.session.id);
   });
-  $('#prompt').addEventListener('input', resizePrompt);
+  $('#prompt').addEventListener('input', () => {
+    resizePrompt();
+    updateMentions().catch(() => {});
+  });
   $('#prompt').addEventListener('keydown', (event) => {
+    const menuOpen = !$('#mention-menu').classList.contains('hidden') && state.mentionMatches.length > 0;
+    if (menuOpen) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        state.mentionIndex = (state.mentionIndex + 1) % state.mentionMatches.length;
+        $$('.mention-item').forEach((el, idx) => el.classList.toggle('active', idx === state.mentionIndex));
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        state.mentionIndex = (state.mentionIndex - 1 + state.mentionMatches.length) % state.mentionMatches.length;
+        $$('.mention-item').forEach((el, idx) => el.classList.toggle('active', idx === state.mentionIndex));
+        return;
+      }
+      if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) {
+        event.preventDefault();
+        selectMention(state.mentionMatches[state.mentionIndex]);
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        hideMentions();
+        return;
+      }
+    }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       sendMessage();
@@ -1233,7 +1545,71 @@ function bind() {
     if (event.key === 'Enter') runTerminal();
   });
   $('#sidebar-toggle').addEventListener('click', () => $('#app').classList.toggle('sidebar-collapsed'));
-  $('#attach-btn').addEventListener('click', () => toast('Attachments arrive with the next version.'));
+  $('#attach-btn').addEventListener('click', attachPickedFiles);
+  $('#key-warning-open').addEventListener('click', openKeys);
+  $('#prompt-inspector-btn').addEventListener('click', () => { togglePromptInspector().catch((error) => toast(error.message)); });
+  $('#theme-btn').addEventListener('click', async () => {
+    const next = state.theme === 'dark' ? 'light' : 'dark';
+    applyTheme(next);
+    await api.invoke('settings:set', { theme: next }).catch(() => {});
+  });
+  $('#view-mode-btn').addEventListener('click', async () => {
+    const next = state.viewMode === 'normal' ? 'verbose' : 'normal';
+    applyViewMode(next);
+    await api.invoke('settings:set', { viewMode: next }).catch(() => {});
+  });
+
+  const composer = $('#composer');
+  composer.addEventListener('dragover', (event) => {
+    event.preventDefault();
+    composer.classList.add('drag-over');
+  });
+  composer.addEventListener('dragleave', () => composer.classList.remove('drag-over'));
+  composer.addEventListener('drop', async (event) => {
+    event.preventDefault();
+    composer.classList.remove('drag-over');
+    const files = [...(event.dataTransfer?.files || [])];
+    for (const file of files.slice(0, 5)) {
+      if (!file.path) continue;
+      try {
+        const att = await api.invoke('files:read-attachment', { filePath: file.path, cwd: state.project });
+        if (att && !state.attachments.some((existing) => existing.name === att.name)) {
+          state.attachments.push(att);
+        }
+      } catch (error) {
+        toast(error.message);
+      }
+    }
+    renderAttachments();
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.metaKey && event.key.toLowerCase() === 'n') {
+      event.preventDefault();
+      newChat();
+    } else if (event.metaKey && event.key === '\\') {
+      event.preventDefault();
+      $('#app').classList.toggle('panel-collapsed');
+    } else if (event.metaKey && event.key.toLowerCase() === 'b') {
+      event.preventDefault();
+      $('#app').classList.toggle('sidebar-collapsed');
+    } else if (event.metaKey && event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      $('#search').focus();
+    } else if (event.ctrlKey && event.key.toLowerCase() === 'o') {
+      event.preventDefault();
+      $('#view-mode-btn').click();
+    } else if (event.ctrlKey && event.key === '`') {
+      event.preventDefault();
+      $('#app').classList.remove('panel-collapsed');
+      document.querySelector('.panel-tab[data-tab="terminal"]')?.click();
+      $('#terminal-cmd')?.focus();
+    } else if (event.key === 'Escape') {
+      if (state.keysOpen) closeKeys();
+      else if (state.memoryOpen) closeMemory();
+      else if (state.streaming && state.session) api.invoke('chat:stop', state.session.id).catch(() => {});
+    }
+  });
 
   document.addEventListener('click', async (event) => {
     const copy = event.target.closest('.copy-btn');
@@ -1279,10 +1655,12 @@ async function pickProject() {
   const folder = await api.invoke('project:pick');
   if (!folder) return;
   state.project = folder;
+  state.projectFiles = null;
   if (state.session) {
     await api.invoke('sessions:update', { id: state.session.id, cwd: folder });
     state.session.cwd = folder;
   }
+  refreshGitBranch();
   renderChips();
   toast('Project folder changed.');
 }
@@ -1298,12 +1676,15 @@ function reportFirstPaint() {
 
 async function init() {
   api.on('chat:event', onChatEvent);
-  const [info, providers, keys, sessions] = await Promise.all([
+  const [info, providers, keys, sessions, savedSettings] = await Promise.all([
     api.invoke('app:info'),
     api.invoke('providers:list'),
     api.invoke('keys:status'),
     api.invoke('sessions:list'),
+    api.invoke('settings:get').catch(() => ({ theme: 'dark', viewMode: 'normal' })),
   ]);
+  applyTheme(savedSettings?.theme);
+  applyViewMode(savedSettings?.viewMode);
   state.info = info;
   state.providers = providers;
   state.keys = keys;
@@ -1335,6 +1716,7 @@ async function init() {
   bind();
   try { await refreshMemory(); } catch { state.memory = null; }
   await loadTerminalTabs();
+  refreshGitBranch();
   renderAll();
   resizePrompt();
   reportFirstPaint();

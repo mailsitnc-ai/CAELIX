@@ -99,6 +99,25 @@ function normalizeMessages(messages) {
     if (message.role === 'tool') {
       return { role: 'tool', tool_call_id: message.toolCallId, content: message.content };
     }
+    if (message.role === 'user' && Array.isArray(message.attachments) && message.attachments.length) {
+      const textBlocks = [String(message.content || '')];
+      const images = [];
+      for (const item of message.attachments) {
+        if (item.kind === 'image' && item.dataUrl) {
+          images.push({ type: 'image_url', image_url: { url: item.dataUrl } });
+        } else if (item.text) {
+          textBlocks.push(`[Attached file: ${item.name || 'file'}]\n${item.text}`);
+        }
+      }
+      const combined = textBlocks.filter(Boolean).join('\n\n');
+      if (images.length) {
+        return {
+          role: 'user',
+          content: [{ type: 'text', text: combined || 'See attached image.' }, ...images],
+        };
+      }
+      return { role: 'user', content: combined };
+    }
     return { role: message.role, content: message.content };
   });
 }
@@ -256,6 +275,43 @@ async function testKey(provider, apiKey) {
   return true;
 }
 
+async function fetchProviderModels(provider, apiKey) {
+  const meta = PROVIDERS[provider];
+  if (!meta) throw new Error(`Unknown provider: ${provider}`);
+  if (meta.keyless) return meta.models;
+  if (!apiKey) throw new Error(`Add a ${meta.name} key first to refresh models.`);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    if (provider === 'gemini') {
+      const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models', {
+        headers: { 'x-goog-api-key': apiKey },
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      const data = await response.json();
+      const ids = (data.models || [])
+        .filter((item) => Array.isArray(item.supportedGenerationMethods) && item.supportedGenerationMethods.includes('generateContent'))
+        .map((item) => String(item.name || '').replace(/^models\//, ''))
+        .filter((id) => id && !id.includes('embedding') && !id.includes('imagen'));
+      return ids.length ? [...new Set([...meta.models, ...ids])].slice(0, 60) : meta.models;
+    }
+    const url = provider === 'openrouter'
+      ? 'https://openrouter.ai/api/v1/models'
+      : 'https://integrate.api.nvidia.com/v1/models';
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${apiKey}` },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(await readError(response));
+    const data = await response.json();
+    const ids = (data.data || []).map((item) => item.id).filter(Boolean);
+    return ids.length ? [...new Set([...meta.models, ...ids])].slice(0, 80) : meta.models;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 module.exports = {
-  PROVIDERS, providerList, streamOpenAICompatible, testKey,
+  PROVIDERS, providerList, streamOpenAICompatible, testKey, fetchProviderModels,
 };

@@ -9,6 +9,13 @@ const { spawn } = require('child_process');
 const { diffLines } = require('./diff');
 
 const MAX_OUTPUT = 60_000;
+const IMAGE_MIME = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+};
 
 function truncate(text, limit = MAX_OUTPUT) {
   const value = String(text ?? '');
@@ -191,6 +198,43 @@ function toolDefinitions(root) {
       },
     },
     {
+      name: 'web_search',
+      description: 'Search the web and return titles, URLs and snippets. Requires approval.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string' },
+          max_results: { type: 'integer', description: 'Default 5, maximum 10.' },
+        },
+        required: ['query'],
+      },
+    },
+    {
+      name: 'notebook_edit',
+      description: 'Read or edit cells in a Jupyter .ipynb notebook as structured JSON without corrupting metadata.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Notebook path, relative to the project.' },
+          action: { type: 'string', enum: ['read', 'replace', 'insert', 'delete'] },
+          cell_index: { type: 'integer', description: '0-based cell index.' },
+          cell_type: { type: 'string', enum: ['code', 'markdown', 'raw'] },
+          source: { type: 'string', description: 'New cell source text for replace or insert.' },
+        },
+        required: ['path', 'action'],
+      },
+    },
+    {
+      name: 'skill',
+      description: 'List or load a local skill bundle (SKILL.md) from the project skills folders on demand.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Skill folder name, or omit to list available skills.' },
+        },
+      },
+    },
+    {
       name: 'multi_edit',
       description: 'Apply several exact-string replacements in one call. Each edit names a file, the unique old text and the replacement. Use this for a coordinated change across files.',
       parameters: {
@@ -310,7 +354,7 @@ class ToolRunner {
     if (this.mode === 'plan' && risk !== 'read') return 'deny';
     if (this.mode === 'bypass' && risk !== 'protected') return 'allow';
     if (this.mode === 'accept' && risk !== 'protected'
-      && (tool === 'write_file' || tool === 'edit_file' || tool === 'multi_edit')) return 'allow';
+      && (tool === 'write_file' || tool === 'edit_file' || tool === 'multi_edit' || tool === 'notebook_edit')) return 'allow';
     const key = `${tool}:${target}`;
     if (this.sessionAllowed?.has(key)) return 'allow';
     const decision = await this.ask({ tool, action, target, detail, risk });
@@ -334,6 +378,9 @@ class ToolRunner {
       case 'bash': return this.bash(input);
       case 'todo_write': return this.todoWrite(input);
       case 'web_fetch': return this.webFetch(input);
+      case 'web_search': return this.webSearch(input);
+      case 'notebook_edit': return this.notebookEdit(input);
+      case 'skill': return this.loadSkill(input);
       case 'multi_edit': return this.multiEdit(input);
       case 'task_start': return this.taskStart(input);
       case 'task_list': return this.taskList(input);
@@ -346,10 +393,20 @@ class ToolRunner {
 
   async readFile(input) {
     const file = this.resolvePath(input.path, { mustExist: true });
+    const relative = path.relative(this.root, file);
     const stat = await fsp.stat(file);
     if (stat.isDirectory()) throw new Error('That path is a directory. Use list_dir.');
     if (stat.size > 4_000_000) throw new Error('File is larger than 4 MB.');
     const buffer = await fsp.readFile(file);
+    const ext = path.extname(file).toLowerCase();
+    if (IMAGE_MIME[ext]) {
+      const mimeType = IMAGE_MIME[ext];
+      return {
+        output: `Image file ${relative} (${buffer.length} B, ${mimeType}).`,
+        imageDataUrl: `data:${mimeType};base64,${buffer.toString('base64')}`,
+        meta: { isImage: true, mimeType, bytes: buffer.length },
+      };
+    }
     if (buffer.includes(0)) throw new Error('That file looks binary.');
     const lines = buffer.toString('utf8').split('\n');
     const offset = Math.max(1, Number(input.offset) || 1);
@@ -711,6 +768,180 @@ class ToolRunner {
     return {
       output: truncate(`HTTP ${response.status} ${response.url}\n\n${text}`, 30_000),
       meta: { status: response.status, type },
+    };
+  }
+
+  async webSearch(input) {
+    const query = String(input.query || '').trim();
+    if (!query) throw new Error('Search query is empty.');
+    const max = Math.min(10, Math.max(1, Number(input.max_results) || 5));
+    const decision = await this.permission('web_search', 'Search web', query.slice(0, 160), query, 'network');
+    if (decision !== 'allow') throw new Error('The user denied this web search.');
+
+    const base = process.env.CAELIX_SEARCH_URL || 'https://html.duckduckgo.com/html/?q=';
+    const url = `${base}${encodeURIComponent(query)}`;
+    const response = await fetch(url, {
+      signal: this.signal,
+      headers: { 'user-agent': 'CAELIX/1.0' },
+      redirect: 'follow',
+    });
+    if (!response.ok) throw new Error(`Search endpoint returned ${response.status}.`);
+    const html = await response.text();
+    const strip = (raw) => raw.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/\s+/g, ' ').trim();
+    const results = [];
+    const linkRe = /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+    const snippetRe = /<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>|<div[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
+    const snippets = [];
+    let snipMatch = snippetRe.exec(html);
+    while (snipMatch) {
+      snippets.push(strip(snipMatch[1] || snipMatch[2] || ''));
+      snipMatch = snippetRe.exec(html);
+    }
+    let linkMatch = linkRe.exec(html);
+    while (linkMatch && results.length < max) {
+      let href = linkMatch[1].replace(/&amp;/g, '&');
+      const uddg = href.match(/[?&]uddg=([^&]+)/);
+      if (uddg) {
+        try { href = decodeURIComponent(uddg[1]); } catch { /* keep href */ }
+      }
+      const title = strip(linkMatch[2]);
+      const snippet = snippets[results.length] || '';
+      if (title && /^https?:\/\//i.test(href)) {
+        results.push({ title, url: href, snippet });
+      }
+      linkMatch = linkRe.exec(html);
+    }
+    const formatted = results.map((item, idx) => `${idx + 1}. ${item.title}\n   ${item.url}${item.snippet ? `\n   ${item.snippet}` : ''}`).join('\n\n');
+    return {
+      output: formatted || `No results found for "${query}".`,
+      meta: { count: results.length, query },
+    };
+  }
+
+  async notebookEdit(input) {
+    const file = this.resolvePath(input.path, { mustExist: true });
+    if (!file.endsWith('.ipynb')) throw new Error('Notebook path must end in .ipynb.');
+    const relative = path.relative(this.root, file);
+    const before = await fsp.readFile(file, 'utf8');
+    let notebook;
+    try {
+      notebook = JSON.parse(before);
+    } catch (error) {
+      throw new Error(`Invalid notebook JSON: ${error.message}`);
+    }
+    if (!Array.isArray(notebook.cells)) throw new Error('The notebook has no cells array.');
+    const action = String(input.action || 'read');
+    if (action === 'read') {
+      const lines = notebook.cells.map((cell, index) => {
+        const src = Array.isArray(cell.source) ? cell.source.join('') : String(cell.source || '');
+        return `[${index}] (${cell.cell_type || 'code'})\n${src}`;
+      });
+      return {
+        output: truncate(lines.join('\n\n---\n\n') || '(no cells)', 40_000),
+        meta: { cells: notebook.cells.length },
+      };
+    }
+
+    const index = Number.isInteger(input.cell_index) ? input.cell_index : Number(input.cell_index ?? 0);
+    if (!Number.isInteger(index) || index < 0) throw new Error('Provide a non-negative integer cell_index.');
+
+    const toSourceLines = (text) => {
+      const value = String(text ?? '');
+      if (!value) return [];
+      return value.split('\n').map((line, i, arr) => (i < arr.length - 1 ? `${line}\n` : line));
+    };
+
+    if (action === 'replace') {
+      if (index >= notebook.cells.length) throw new Error(`Cell ${index} does not exist (${notebook.cells.length} cells).`);
+      const cell = notebook.cells[index];
+      if (input.cell_type) cell.cell_type = input.cell_type;
+      cell.source = toSourceLines(input.source);
+    } else if (action === 'insert') {
+      if (index > notebook.cells.length) throw new Error(`Insert index ${index} out of range (${notebook.cells.length} cells).`);
+      const cellType = input.cell_type || 'code';
+      const newCell = {
+        cell_type: cellType,
+        metadata: {},
+        source: toSourceLines(input.source),
+        ...(cellType === 'code' ? { execution_count: null, outputs: [] } : {}),
+      };
+      notebook.cells.splice(index, 0, newCell);
+    } else if (action === 'delete') {
+      if (index >= notebook.cells.length) throw new Error(`Cell ${index} does not exist (${notebook.cells.length} cells).`);
+      notebook.cells.splice(index, 1);
+    } else {
+      throw new Error(`Unsupported notebook action: ${action}`);
+    }
+
+    const after = `${JSON.stringify(notebook, null, 1)}\n`;
+    const decision = await this.permission(
+      'notebook_edit',
+      `Notebook ${action}`,
+      relative,
+      `Cell ${index} (${action})`,
+      isProtectedPath(relative) ? 'protected' : 'write',
+    );
+    if (decision !== 'allow') throw new Error('The user denied this notebook edit.');
+    await fsp.writeFile(file, after, 'utf8');
+    const diff = diffLines(before, after);
+    this.emit?.({
+      type: 'change',
+      file: relative,
+      before,
+      after,
+      existed: true,
+      additions: diff.additions,
+      deletions: diff.deletions,
+    });
+    return {
+      output: `Updated ${relative} (${action} cell ${index}; ${notebook.cells.length} cell(s) total).`,
+      change: { file: relative, before, after, existed: true, ...diff },
+      meta: { cells: notebook.cells.length },
+    };
+  }
+
+  async loadSkill(input) {
+    const roots = [
+      path.join(this.root, '.caelix', 'skills'),
+      path.join(this.root, '.claude', 'skills'),
+      path.join(this.root, 'skills'),
+    ];
+    const discovered = [];
+    for (const dir of roots) {
+      if (!fs.existsSync(dir)) continue;
+      let entries = [];
+      try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { continue; }
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const skillFile = path.join(dir, entry.name, 'SKILL.md');
+        if (fs.existsSync(skillFile)) {
+          discovered.push({ name: entry.name, dir: path.join(dir, entry.name), file: skillFile });
+        }
+      }
+    }
+    const name = String(input.name || '').trim();
+    if (!name) {
+      if (!discovered.length) return { output: 'No local skills found in .caelix/skills, .claude/skills, or skills.', meta: { count: 0 } };
+      return {
+        output: discovered.map((item) => `- ${item.name} (${path.relative(this.root, item.file)})`).join('\n'),
+        meta: { count: discovered.length },
+      };
+    }
+    const found = discovered.find((item) => item.name.toLowerCase() === name.toLowerCase());
+    if (!found) {
+      throw new Error(`Skill "${name}" was not found. Available: ${discovered.map((item) => item.name).join(', ') || 'none'}.`);
+    }
+    const body = await fsp.readFile(found.file, 'utf8');
+    const extras = [];
+    try {
+      for (const entry of await fsp.readdir(found.dir, { withFileTypes: true })) {
+        if (entry.name !== 'SKILL.md') extras.push(`${entry.isDirectory() ? 'dir ' : 'file'} ${entry.name}`);
+      }
+    } catch { /* ignore */ }
+    return {
+      output: truncate(`Skill: ${found.name} (${path.relative(this.root, found.file)})\n${extras.length ? `Resources: ${extras.join(', ')}\n` : ''}\n${body}`, 24_000),
+      meta: { name: found.name, path: path.relative(this.root, found.file) },
     };
   }
 }

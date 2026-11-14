@@ -383,7 +383,12 @@ async function run(context) {
       const report = await evaluate('window.__caelixState.contextReport');
       if (!report || !(report.total > 0)) throw new Error('The context report is empty.');
       if (!(report.messages > 0)) throw new Error('The context report counted no messages.');
-      return `${report.total} tokens across ${report.messages} messages`;
+      await click('#prompt-inspector-btn');
+      await waitFor('document.querySelector("#prompt-inspector")?.textContent.includes("Available tools:")', 5000, 'system prompt inspector');
+      const inspected = await evaluate('document.querySelector("#prompt-inspector").textContent');
+      if (!inspected.includes('caelix-memory-ok')) throw new Error('System prompt inspector missing memory.');
+      await click('#prompt-inspector-btn');
+      return `${report.total} tokens across ${report.messages} messages; prompt inspected`;
     });
     await sleep(250);
     await snap('context report');
@@ -407,6 +412,78 @@ async function run(context) {
     await sleep(200);
     await snap('checkpoint restore');
 
+    await step('checklist, skill, notebook, image read and web_search gate', async () => {
+      await fsp.mkdir(path.join(workspace, '.caelix', 'skills', 'demo'), { recursive: true });
+      await fsp.writeFile(path.join(workspace, '.caelix', 'skills', 'demo', 'SKILL.md'), '# Demo Skill\nAlways verify outputs.\n');
+      await fsp.writeFile(path.join(workspace, 'demo.ipynb'), JSON.stringify({
+        cells: [{ cell_type: 'code', execution_count: null, metadata: { trusted: true }, outputs: [], source: ['print("old")\n'] }],
+        metadata: { kernelspec: { name: 'python3' } },
+        nbformat: 4,
+        nbformat_minor: 5,
+      }, null, 1));
+      const png1x1 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+      await fsp.writeFile(path.join(workspace, 'pixel.png'), png1x1);
+
+      await setValue('#prompt', 'Run checklist-and-notebook verification.');
+      await click('#send-btn');
+      await waitFor('!document.querySelector("#todo-bar").classList.contains("hidden")', 12000, 'todo checklist visible');
+      await waitFor('window.__caelixState.streaming === false', 20000, 'extended tools turn complete');
+
+      const nb = JSON.parse(await fsp.readFile(path.join(workspace, 'demo.ipynb'), 'utf8'));
+      if (!String(nb.cells[0].source.join('')).includes('caelix notebook ok')) throw new Error('Notebook cell was not updated.');
+      if (nb.metadata?.kernelspec?.name !== 'python3') throw new Error('Notebook metadata was lost.');
+
+      const { ToolRunner } = require('./engine/tools');
+      const runner = new ToolRunner({ root: workspace, mode: 'ask', ask: async () => 'deny' });
+      let searchDenied = false;
+      try {
+        await runner.execute('web_search', { query: 'caelix test' });
+      } catch (error) {
+        searchDenied = /denied/i.test(error.message);
+      }
+      if (!searchDenied) throw new Error('web_search did not require permission.');
+      const imgRes = await runner.execute('read_file', { path: 'pixel.png' });
+      if (!imgRes.imageDataUrl?.startsWith('data:image/png;base64,')) throw new Error('read_file did not return image block.');
+      return 'checklist rendered, notebook/skill/image/web_search verified';
+    });
+
+    await step('bypass banner, mentions, key gate, status strip, view mode and light theme', async () => {
+      await click('#mode-chip');
+      await waitFor('!document.querySelector("#mode-menu").classList.contains("hidden")', 3000, 'mode menu bypass');
+      await click('[data-mode="bypass"]');
+      await waitFor('!document.querySelector("#bypass-banner").classList.contains("hidden")', 3000, 'bypass warning visible');
+      await click('#mode-chip');
+      await click('[data-mode="accept"]');
+      await waitFor('document.querySelector("#bypass-banner").classList.contains("hidden")', 3000, 'bypass warning hidden');
+
+      await click('#model-chip');
+      await waitFor('!document.querySelector("#model-menu").classList.contains("hidden")', 3000, 'model menu');
+      await click('[data-provider="gemini"][data-model="gemini-2.5-flash"]');
+      await waitFor('!document.querySelector("#key-warning").classList.contains("hidden") && document.querySelector("#send-btn").disabled === true', 3000, 'missing-key composer gate');
+      await click('#model-chip');
+      await click('[data-provider="simulator"][data-model="sim-1"]');
+      await waitFor('document.querySelector("#key-warning").classList.contains("hidden") && document.querySelector("#send-btn").disabled === false', 3000, 'simulator restored');
+
+      await setValue('#prompt', '@caelix');
+      await waitFor('!document.querySelector("#mention-menu").classList.contains("hidden")', 4000, 'mention menu');
+      await setValue('#prompt', '');
+
+      const stripText = await evaluate('document.querySelector("#status-strip")?.textContent || ""');
+      if (!stripText.includes('context')) throw new Error('Status strip is missing context info.');
+
+      await click('#view-mode-btn');
+      await waitFor('document.querySelector("#view-mode-btn").textContent === "Verbose"', 3000, 'verbose mode');
+      await click('#view-mode-btn');
+      await click('#theme-btn');
+      await waitFor('document.documentElement.getAttribute("data-theme") === "light"', 3000, 'light theme');
+      await waitFor('getComputedStyle(document.body).backgroundColor === "rgb(246, 247, 249)"', 3000, 'light theme painted');
+      await sleep(200);
+      await snap('light theme');
+      await click('#theme-btn');
+      await waitFor('document.documentElement.getAttribute("data-theme") === "dark"', 3000, 'dark theme restored');
+      return 'bypass, mentions, key gate, status strip, view mode, light theme verified';
+    });
+
     await step('protected paths refuse a bypass write', async () => {
       const { ToolRunner } = require('./engine/tools');
       const runner = new ToolRunner({ root: workspace, mode: 'bypass', ask: async () => 'deny' });
@@ -421,13 +498,15 @@ async function run(context) {
     });
 
     await step('delete a chat inline', async () => {
+      const initialCount = await evaluate('document.querySelectorAll(".session-item").length');
+      const prevActiveId = await evaluate('window.__caelixState.activeId');
       await click('#new-chat');
-      await waitFor('window.__caelixState.sessions.length > 1', 5000, 'second chat');
+      await waitFor(`window.__caelixState.activeId !== ${JSON.stringify(prevActiveId)} && document.querySelectorAll(".session-item").length === ${initialCount + 1}`, 5000, 'new chat rendered');
       const before = await evaluate('document.querySelectorAll(".session-item").length');
       await click('.session-item.active .session-delete');
       await waitFor('document.querySelector(".session-item.active .session-delete.armed")', 3000, 'delete armed');
       await click('.session-item.active .session-delete');
-      await sleep(800);
+      await waitFor(`document.querySelectorAll(".session-item").length === ${before - 1}`, 5000, 'chat deleted from sidebar');
       const after = await evaluate('document.querySelectorAll(".session-item").length');
       if (after >= before) throw new Error('The chat was not deleted from the sidebar.');
       return `chat deleted (${before} → ${after})`;
