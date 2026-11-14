@@ -1,7 +1,10 @@
 # CAELIX changelog
 
-## 0.1.9 (Groq & timeout/reasoning updates)
+## 0.1.9 (Chat | Code switcher & folder picker updates)
 
+- Added a **`Chat | </> Code`** workspace switcher in the top bar (plus `/chat` and `/code` slash commands) persisted via `settings:set`: **Chat** mode gives a distraction-free conversation layout, while **Code** mode shows the full right-hand `Changes`, `Terminal`, and `Context` panel.
+- Kept **MCP servers, Skills (`CAELIX.md` / `Project memory`), Lifecycle Hooks, and Agents** active across **both** Chat and Code modes, with quick capability pills in the Chat empty state.
+- Added a centered **Code workspace folder** card in empty Code sessions showing recent project folders (clickable to switch immediately) and a **Choose folder…** button (plus `/folder`).
 - Preconfigured built-in local **MCP servers** (`desktop`: `mac_system_info`, `git_overview`, `listening_ports`, `clipboard_read`; `memory`: persistent `memory_save`, `memory_search`, `memory_delete` via `src/engine/mcp-builtin.js`), Homebrew `PATH` discovery, one-click presets, and Claude MCP import.
 - Preconfigured default **Lifecycle Hooks** (destructive `bash` command guard, `.env`/key file edit guard, and post-edit JS/JSON syntax check) plus quick-add hook presets in the UI.
 - Added **`AgentRegistry`** (`src/engine/agents.js`) with 5 built-in specialized agents (`explore`, `plan`, `review`, `verify`, `general`), `.caelix/agents/*.md` and `.claude/agents/*.md` custom agent support, and an upgraded **Agents** modal to pick or create reusable agents.

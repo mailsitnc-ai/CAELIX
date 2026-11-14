@@ -57,11 +57,11 @@ Markers:
 
 ## 4. Code View, Speed, Packaging & Visual Target (`features.md` §2, §4–§6 · `SPEC.md` §7)
 
-- [x] **Three-column layout & proportions** — `48 px` top bar with traffic-light inset, `260 px` left sidebar (collapsed `56 px`), max `800 px` centered transcript & composer (`16 px` radius), `380 px` right panel (`Changes`, `Terminal`, `Context`), dark default + light theme (`checks/steps/01-empty-state.png`, `checks/selfcheck.png`, `checks/steps/11-light-theme.png`).
+- [x] **Three-column layout, Chat/Code switcher & folder picker** — `48 px` top bar with `Chat | </> Code` switcher (`/chat`, `/code`), traffic-light inset, `260 px` left sidebar (collapsed `56 px`), max `800 px` centered transcript & composer (`16 px` radius), `380 px` right panel (`Changes`, `Terminal`, `Context`) hidden in Chat while keeping MCP/Hooks/Agents/Skills active in both modes, centered Code workspace folder picker (`#empty-choose-folder`), dark default + light theme (`checks/steps/01-empty-state.png`, `checks/steps/13-chat-and-code-switcher.png`, `checks/steps/11-light-theme.png`).
 - [x] **Remaining surfaces implemented & checked** — File/image attachments + drag-drop + `@` mentions, inline checkpoints + restore, system prompt inspector, missing-key Send gate, bypass warning banner, Normal/Verbose (`Ctrl+O`), keyboard shortcuts (`Cmd+N`, `Cmd+\`, `Cmd+B`, `Cmd+K`, `Ctrl+O`, `` Ctrl+` ``, `Esc`), desktop notifications when unfocused.
 - [x] **Startup & memory budgets (`< 2000 ms`)**:
-  - Source self-check (`env -u ELECTRON_RUN_AS_NODE npm run selfcheck`): `22/22` steps passed, `window 539 ms`, `first paint 106.8 ms`, working set `379 MB`, `0` errors.
-  - Packaged bundle (`dist/CAELIX.app`, `codesign --verify --strict` exit `0`): `22/22` steps passed, `window 515 ms`, `first paint 110.3 ms`, working set `336 MB`, `0` errors.
+  - Source self-check (`env -u ELECTRON_RUN_AS_NODE npm run selfcheck`): `23/23` steps passed, `window 760 ms`, `first paint 116.4 ms`, working set `397 MB`, `0` errors.
+  - Packaged bundle (`dist/CAELIX.app`, `codesign --verify --strict` exit `0`): `23/23` steps passed, `window 653 ms`, `first paint 66 ms`, working set `480 MB`, `0` errors.
 - [x] **CAELIX branding & Desktop shortcut** — Four-point star SVG/PNG/`.icns` assets used across window, Dock, bundle `Info.plist`, and `/Users/shivam/Desktop/CAELIX.app` (`scripts/package.js`).
 
 ---

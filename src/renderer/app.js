@@ -41,6 +41,7 @@ const state = {
   activeTerminalId: null,
   theme: 'dark',
   viewMode: 'normal',
+  surface: 'code',
   gitBranch: null,
   attachments: [],
   projectFiles: null,
@@ -385,19 +386,102 @@ function renderAttachments() {
   }
 }
 
+function recentProjectFolders() {
+  const seen = new Set();
+  const out = [];
+  for (const dir of [state.project, state.session?.cwd, ...(state.sessions || []).map((s) => s.cwd)]) {
+    if (!dir || seen.has(dir)) continue;
+    seen.add(dir);
+    out.push(dir);
+    if (out.length >= 5) break;
+  }
+  return out;
+}
+
+function folderBaseName(dir) {
+  if (!dir) return 'Choose folder';
+  const parts = String(dir).split('/').filter(Boolean);
+  return parts[parts.length - 1] || dir;
+}
+
+function folderParentLabel(dir) {
+  if (!dir) return '';
+  const parts = String(dir).split('/');
+  if (parts.length <= 2) return '/';
+  return parts.slice(0, -1).join('/').replace(/^\/Users\/[^/]+/, '~');
+}
+
 function renderEmpty() {
   const transcript = $('#transcript');
-  transcript.innerHTML = `
-    <div class="empty-state">
-      <img src="../../assets/icon-1024.png" alt="CAELIX">
-      <h1>What should we build?</h1>
-      <p>CAELIX works inside ${escapeHtml(displayProject(state.project))}. Ask for a change, a fix, or an explanation. Tools, permissions and every file change stay visible.</p>
-      <div class="empty-grid">
-        <button class="empty-card" data-example="Explain this project and list the most important files."><b>Explore</b>Map the project and the files that matter.</button>
-        <button class="empty-card" data-example="Find one small improvement, make it, and verify it."><b>Improve</b>Find, change and check a real improvement.</button>
-        <button class="empty-card" data-example="Run the tests and fix the first failure."><b>Fix</b>Run the checks and repair the first error.</button>
-      </div>
-    </div>`;
+  if (state.surface === 'chat') {
+    transcript.innerHTML = `
+      <div class="empty-state">
+        <img src="../../assets/icon-1024.png" alt="CAELIX">
+        <h1>How can I help today?</h1>
+        <p>Chat cleanly while keeping MCP servers, Skills, Hooks and Agents active across your session.</p>
+        <div class="chat-capability-pills">
+          <button type="button" class="cap-pill" data-open-modal="mcp">MCP Servers</button>
+          <button type="button" class="cap-pill" data-open-modal="hooks">Lifecycle Hooks</button>
+          <button type="button" class="cap-pill" data-open-modal="helper">Agents</button>
+          <button type="button" class="cap-pill" data-open-modal="memory">Skills &amp; Memory</button>
+          <button type="button" class="cap-pill" id="empty-open-code">Switch to &lt;/&gt; Code</button>
+        </div>
+        <div class="empty-grid">
+          <button class="empty-card" data-example="Summarize what my connected MCP tools and Skills can do right now."><b>Explore capabilities</b>Inspect connected MCP tools, Hooks, Agents &amp; Skills.</button>
+          <button class="empty-card" data-example="Help me brainstorm, compare options, and save key decisions to memory."><b>Think &amp; remember</b>Reason through a question and save notes to Memory MCP.</button>
+          <button class="empty-card" data-example="Research this topic and run a focused Agent to verify details."><b>Research with Agents</b>Delegate structured investigation to built-in Agents.</button>
+        </div>
+      </div>`;
+    for (const pill of $$('.cap-pill[data-open-modal]', transcript)) {
+      pill.addEventListener('click', () => {
+        const target = pill.dataset.openModal;
+        if (target === 'mcp') openMcp();
+        else if (target === 'hooks') openHooks();
+        else if (target === 'helper') openHelper();
+        else if (target === 'memory') openMemory();
+      });
+    }
+    $('#empty-open-code', transcript)?.addEventListener('click', () => applySurface('code', true));
+  } else {
+    const folders = recentProjectFolders();
+    const folderRows = folders.map((dir) => {
+      const active = dir === state.project;
+      return `
+        <button type="button" class="folder-pick-item${active ? ' active' : ''}" data-pick-folder="${escapeHtml(dir)}" title="${escapeHtml(dir)}">
+          <span class="folder-pick-dot"></span>
+          <span class="folder-pick-name">${escapeHtml(folderBaseName(dir))}</span>
+          <span class="folder-pick-path">${escapeHtml(folderParentLabel(dir))}</span>
+        </button>`;
+    }).join('');
+    transcript.innerHTML = `
+      <div class="empty-state has-folder-picker">
+        <img src="../../assets/icon-1024.png" alt="CAELIX">
+        <h1>What should we build?</h1>
+        <p>CAELIX Code works inside ${escapeHtml(displayProject(state.project))}. Tools, Changes, Terminal, MCP, Skills, Hooks and Agents stay ready.</p>
+        <div class="folder-picker-card">
+          <div class="folder-picker-head">
+            <span>Code workspace folder</span>
+            <span>${folders.length} recent</span>
+          </div>
+          ${folderRows}
+          <button type="button" id="empty-choose-folder" class="folder-choose-btn">
+            <span>Choose folder…</span>
+            <span>Open</span>
+          </button>
+        </div>
+        <div class="empty-grid">
+          <button class="empty-card" data-example="Explain this project and list the most important files."><b>Explore</b>Map the project and the files that matter.</button>
+          <button class="empty-card" data-example="Find one small improvement, make it, and verify it."><b>Improve</b>Find, change and check a real improvement.</button>
+          <button class="empty-card" data-example="Run the tests and fix the first failure."><b>Fix</b>Run the checks and repair the first error.</button>
+        </div>
+      </div>`;
+    for (const btn of $$('.folder-pick-item[data-pick-folder]', transcript)) {
+      btn.addEventListener('click', () => {
+        selectProjectFolder(btn.dataset.pickFolder).catch((error) => toast(error.message));
+      });
+    }
+    $('#empty-choose-folder', transcript)?.addEventListener('click', pickProject);
+  }
   for (const card of $$('.empty-card', transcript)) {
     card.addEventListener('click', () => {
       $('#prompt').value = card.dataset.example;
@@ -1257,6 +1341,9 @@ function onChatEvent(event) {
 const SLASH_COMMANDS = [
   { name: '/compact', args: '[focus]', desc: 'Summarize older messages to save context tokens' },
   { name: '/btw', args: '<question>', desc: 'Ask an ephemeral side question without saving to history' },
+  { name: '/chat', args: '', desc: 'Switch workspace to Chat mode (MCP, Skills, Hooks & Agents stay active)' },
+  { name: '/code', args: '', desc: 'Switch workspace to Code mode with Changes, Terminal & folder picker' },
+  { name: '/folder', args: '', desc: 'Choose or switch the active Code project folder' },
   { name: '/helper', args: '<task>', desc: 'Run the read-only Helper Agent on a focused task' },
   { name: '/agent', args: '<task>', desc: 'Alias for /helper' },
   { name: '/mcp', args: '', desc: 'Manage stdio or HTTP MCP servers' },
@@ -1345,6 +1432,17 @@ async function runSlashCommand(raw) {
       return true;
     case '/keys':
       openKeys();
+      return true;
+    case '/chat':
+      applySurface('chat', true);
+      toast('Switched to Chat mode.');
+      return true;
+    case '/code':
+      applySurface('code', true);
+      toast('Switched to Code mode.');
+      return true;
+    case '/folder':
+      await pickProject();
       return true;
     case '/clear':
     case '/new':
@@ -1812,6 +1910,29 @@ function applyViewMode(viewMode) {
   }
 }
 
+function applySurface(surface, persist = false) {
+  state.surface = surface === 'chat' ? 'chat' : 'code';
+  $('#app')?.setAttribute('data-surface', state.surface);
+  const chatBtn = $('#surface-chat');
+  const codeBtn = $('#surface-code');
+  chatBtn?.classList.toggle('active', state.surface === 'chat');
+  codeBtn?.classList.toggle('active', state.surface === 'code');
+  chatBtn?.setAttribute('aria-selected', String(state.surface === 'chat'));
+  codeBtn?.setAttribute('aria-selected', String(state.surface === 'code'));
+  const prompt = $('#prompt');
+  if (prompt) {
+    prompt.placeholder = state.surface === 'chat'
+      ? 'Ask CAELIX anything — MCP, Skills, Hooks & Agents stay active (/ commands)'
+      : 'Ask CAELIX to build, fix, or explain something… (/ commands, @ files)';
+  }
+  if (state.session && !(state.session.messages || []).length) {
+    renderEmpty();
+  }
+  if (persist) {
+    api.invoke('settings:set', { surface: state.surface }).catch(() => {});
+  }
+}
+
 function hideMentions() {
   state.mentionQuery = null;
   state.mentionMatches = [];
@@ -2184,6 +2305,8 @@ function bind() {
 
   $('#project-btn').addEventListener('click', pickProject);
   $('#side-project').addEventListener('click', pickProject);
+  $('#surface-chat')?.addEventListener('click', () => applySurface('chat', true));
+  $('#surface-code')?.addEventListener('click', () => applySurface('code', true));
 
   $('#panel-toggle').addEventListener('click', () => $('#app').classList.toggle('panel-collapsed'));
   $('#panel-close').addEventListener('click', () => $('#app').classList.add('panel-collapsed'));
@@ -2317,8 +2440,7 @@ async function runTerminal() {
   }
 }
 
-async function pickProject() {
-  const folder = await api.invoke('project:pick');
+async function selectProjectFolder(folder) {
   if (!folder) return;
   state.project = folder;
   state.projectFiles = null;
@@ -2327,8 +2449,19 @@ async function pickProject() {
     state.session.cwd = folder;
   }
   refreshGitBranch();
+  refreshMemory().catch(() => {});
   renderChips();
-  toast('Project folder changed.');
+  if (state.session && !(state.session.messages || []).length) {
+    renderEmpty();
+  }
+  $('#prompt')?.focus();
+  toast(`Workspace folder: ${folderBaseName(folder)}`);
+}
+
+async function pickProject() {
+  const folder = await api.invoke('project:pick');
+  if (!folder) return;
+  await selectProjectFolder(folder);
 }
 
 function reportFirstPaint() {
@@ -2347,10 +2480,11 @@ async function init() {
     api.invoke('providers:list'),
     api.invoke('keys:status'),
     api.invoke('sessions:list'),
-    api.invoke('settings:get').catch(() => ({ theme: 'dark', viewMode: 'normal' })),
+    api.invoke('settings:get').catch(() => ({ theme: 'dark', viewMode: 'normal', surface: 'code' })),
   ]);
   applyTheme(savedSettings?.theme);
   applyViewMode(savedSettings?.viewMode);
+  applySurface(savedSettings?.surface);
   state.info = info;
   state.providers = providers;
   state.keys = keys;

@@ -339,14 +339,17 @@ function registerIpc() {
   ipcMain.handle('settings:get', () => ({
     theme: settings.get('theme', 'dark'),
     viewMode: settings.get('viewMode', 'normal'),
+    surface: settings.get('surface', 'code'),
   }));
 
   ipcMain.handle('settings:set', (_event, patch = {}) => {
     if (patch.theme === 'dark' || patch.theme === 'light') settings.set('theme', patch.theme);
     if (patch.viewMode === 'normal' || patch.viewMode === 'verbose') settings.set('viewMode', patch.viewMode);
+    if (patch.surface === 'chat' || patch.surface === 'code') settings.set('surface', patch.surface);
     return {
       theme: settings.get('theme', 'dark'),
       viewMode: settings.get('viewMode', 'normal'),
+      surface: settings.get('surface', 'code'),
     };
   });
 

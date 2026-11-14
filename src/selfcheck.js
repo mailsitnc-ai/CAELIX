@@ -586,6 +586,28 @@ async function run(context) {
       return `chat deleted (${before} → ${after})`;
     });
 
+    await step('chat and code switcher with folder picker', async () => {
+      const initialCount = await evaluate('document.querySelectorAll(".session-item").length');
+      const prevActiveId = await evaluate('window.__caelixState.activeId');
+      await click('#new-chat');
+      await waitFor(`window.__caelixState.activeId !== ${JSON.stringify(prevActiveId)} && document.querySelectorAll(".session-item").length === ${initialCount + 1}`, 5000, 'empty session for switcher check');
+      await waitFor('document.querySelector("#app").getAttribute("data-surface") === "code"', 3000, 'default code surface');
+      await waitFor('!!document.querySelector(".folder-picker-card") && !!document.querySelector("#empty-choose-folder")', 3000, 'code folder picker rendered');
+      await click('#surface-chat');
+      await waitFor('document.querySelector("#app").getAttribute("data-surface") === "chat"', 3000, 'switched to chat surface');
+      await waitFor('document.querySelector("#panel").offsetWidth === 0 && !!document.querySelector(".chat-capability-pills")', 3000, 'chat surface hides code panel and keeps capability pills');
+      const sharedBtnsVisible = await evaluate('["#mcp-btn", "#hooks-btn", "#helper-btn", "#memory-btn"].every(s => document.querySelector(s)?.offsetWidth > 0)');
+      if (!sharedBtnsVisible) throw new Error('MCP, Hooks, Agents, or Skills button was hidden in Chat mode.');
+      await click('#surface-code');
+      await waitFor('document.querySelector("#app").getAttribute("data-surface") === "code" && document.querySelector("#panel").offsetWidth > 300 && !!document.querySelector(".folder-picker-card")', 3000, 'switched back to code surface');
+      await snap('chat and code switcher');
+      await click('.session-item.active .session-delete');
+      await waitFor('document.querySelector(".session-item.active .session-delete.armed")', 3000, 'delete armed');
+      await click('.session-item.active .session-delete');
+      await waitFor(`document.querySelectorAll(".session-item").length === ${initialCount}`, 5000, 'temp switcher chat deleted');
+      return 'Chat <-> Code switcher, shared MCP/Hooks/Agents/Skills, and Code folder picker verified';
+    });
+
     await step('collapse and restore the right panel', async () => {
       await click('#panel-toggle');
       await waitFor('document.querySelector("#panel").offsetWidth === 0', 3000, 'panel collapsed');
