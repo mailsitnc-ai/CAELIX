@@ -1,5 +1,9 @@
 # CAELIX changelog
 
+## 0.1.9 (icon fix) — transparent Dock & app icon corners
+
+- Removed opaque white screenshot corners from `assets/icon-1024.png`, `assets/icon.iconset/*.png`, and `assets/icon.icns` with clean inverse-alpha edge unblending (preserving the exact four-point star, colors, and proportions), and rebuilt `dist/CAELIX.app`.
+
 ## 0.1.9 — MCP servers, hooks, slash commands, Helper Agent, rate-limit retries and NVIDIA NIM catalog
 
 - Added MCP server support (`src/engine/mcp.js`, `McpManager`) for stdio and HTTP servers configured in `.mcp.json` and user `mcp.json`, exposing discovered `mcp__<server>__<tool>` tools with permission-mode gating and a UI management modal (`MCP` button / `/mcp`).
