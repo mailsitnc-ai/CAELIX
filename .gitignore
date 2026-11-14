@@ -1,0 +1,14 @@
+node_modules/
+dist/
+build/
+out/
+release/
+*.app/
+study/
+checks/
+*.key
+*.pem
+.env
+.env.*
+.DS_Store
+npm-debug.log*

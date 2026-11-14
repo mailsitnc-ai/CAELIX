@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="42%" r="78%">
+      <stop offset="0%" stop-color="#16294a"/>
+      <stop offset="42%" stop-color="#0b1526"/>
+      <stop offset="78%" stop-color="#070b13"/>
+      <stop offset="100%" stop-color="#04060a"/>
+    </radialGradient>
+    <radialGradient id="halo" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#9fd4ff" stop-opacity=".95"/>
+      <stop offset="35%" stop-color="#4d9ae8" stop-opacity=".42"/>
+      <stop offset="100%" stop-color="#2b6fb8" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ray" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#dff2ff"/>
+      <stop offset="30%" stop-color="#a9d8ff"/>
+      <stop offset="62%" stop-color="#7dbdf5"/>
+      <stop offset="100%" stop-color="#bfe6ff"/>
+    </linearGradient>
+    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="55%" stop-color="#eaf7ff"/>
+      <stop offset="100%" stop-color="#a9d8ff"/>
+    </linearGradient>
+    <filter id="bloom" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="26"/>
+    </filter>
+    <filter id="bloomWide" x="-110%" y="-110%" width="320%" height="320%">
+      <feGaussianBlur stdDeviation="62"/>
+    </filter>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+    <clipPath id="squircle">
+      <rect x="0" y="0" width="1024" height="1024" rx="224" ry="224"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#squircle)">
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#bg)"/>
+    <ellipse cx="512" cy="500" rx="430" ry="430" fill="#1b3a63" opacity=".16" filter="url(#bloomWide)"/>
+    <path d="M0 24 C 250 -6, 520 -10, 780 6 C 900 14, 980 36, 1024 64 L1024 0 L0 0 Z" fill="#2c4f7d" opacity=".10"/>
+  </g>
+
+  <g transform="translate(512 512) scale(0.9) translate(-512 -512)">
+    <ellipse cx="512" cy="512" rx="235" ry="235" fill="url(#halo)" opacity=".55" filter="url(#bloomWide)"/>
+    <ellipse cx="512" cy="512" rx="150" ry="150" fill="#86c6ff" opacity=".22" filter="url(#bloom)"/>
+
+    <path d="M512 158
+             C 527 374, 646 494, 862 512
+             C 646 530, 527 650, 512 866
+             C 497 650, 378 530, 162 512
+             C 378 494, 497 374, 512 158 Z"
+          fill="url(#ray)" opacity=".28" filter="url(#bloom)"/>
+
+    <path d="M512 188
+             C 518 414, 610 506, 836 512
+             C 610 518, 518 610, 512 836
+             C 506 610, 414 518, 188 512
+             C 414 506, 506 414, 512 188 Z"
+          fill="none" stroke="#cbe9ff" stroke-width="7" opacity=".9" filter="url(#soft)"/>
+
+    <path d="M512 198
+             C 518 420, 604 506, 826 512
+             C 604 518, 518 604, 512 826
+             C 506 604, 420 518, 198 512
+             C 420 506, 506 420, 512 198 Z"
+          fill="url(#ray)" opacity=".92"/>
+
+    <path d="M512 356
+             C 518 452, 572 506, 668 512
+             C 572 518, 518 572, 512 668
+             C 506 572, 452 518, 356 512
+             C 452 506, 506 452, 512 356 Z"
+          fill="url(#core)" opacity=".98"/>
+
+    <path d="M512 214
+             C 517 424, 608 506, 810 512
+             C 608 518, 517 608, 512 810
+             C 507 608, 416 518, 214 512
+             C 416 506, 507 424, 512 214 Z"
+          fill="none" stroke="#ffffff" stroke-width="2.4" opacity=".65"/>
+
+    <circle cx="512" cy="512" r="26" fill="#ffffff" filter="url(#bloom)"/>
+    <circle cx="512" cy="512" r="13" fill="#ffffff"/>
+  </g>
+
+  <rect x="1" y="1" width="1022" height="1022" rx="223" ry="223" fill="none" stroke="#7fb8e6" stroke-width="2" opacity=".10"/>
+</svg>

@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CAELIX</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app" id="app">
+    <header class="topbar" id="topbar">
+      <div class="tb-left">
+        <button id="sidebar-toggle" class="icon-btn" title="Toggle sidebar" aria-label="Toggle sidebar">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="2.5" width="13" height="11" rx="2.5" stroke="currentColor"/><path d="M6 2.5v11" stroke="currentColor"/></svg>
+        </button>
+        <div class="brand" aria-label="CAELIX">
+          <img class="brand-mark" src="../../assets/icon-1024.png" alt="">
+          <span>CAELIX</span>
+        </div>
+        <button id="project-btn" class="project-btn" title="Choose a project folder">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1.5 4.5A2 2 0 0 1 3.5 2.5h3l1.5 2h4.5a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2v-7Z" stroke="currentColor"/></svg>
+          <span id="project-name">Project</span>
+          <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="m3 4.5 3 3 3-3" stroke="currentColor" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="tb-center">
+        <button id="chat-title-btn" class="chat-title-btn" title="Rename chat">
+          <span id="chat-title">New chat</span>
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="m10.8 2.6 2.6 2.6-7.6 7.6-3.3.7.7-3.3 7.6-7.6Z" stroke="currentColor"/></svg>
+        </button>
+        <input id="title-input" class="title-input hidden" maxlength="120" aria-label="Chat title">
+      </div>
+      <div class="tb-right">
+        <div class="chip-wrap">
+          <button id="mode-chip" class="mini-chip" title="Permission mode">Ask</button>
+          <div id="mode-menu" class="popover hidden"></div>
+        </div>
+        <div class="chip-wrap">
+          <button id="model-chip" class="mini-chip model" title="Model">gemini-2.5-flash</button>
+          <div id="model-menu" class="popover wide hidden"></div>
+        </div>
+        <button id="keys-btn" class="ghost-btn">Keys</button>
+        <button id="panel-toggle" class="icon-btn" title="Toggle panel" aria-label="Toggle panel">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="2.5" width="13" height="11" rx="2.5" stroke="currentColor"/><path d="M10 2.5v11" stroke="currentColor"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="sidebar" id="sidebar">
+        <div class="side-top">
+          <button id="new-chat" class="new-chat">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 2.5v11M2.5 8h11" stroke="currentColor" stroke-linecap="round"/></svg>
+            New chat
+          </button>
+        </div>
+        <div class="search-wrap">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.5" stroke="currentColor"/><path d="m10.5 10.5 3 3" stroke="currentColor" stroke-linecap="round"/></svg>
+          <input id="search" placeholder="Search chats" aria-label="Search chats">
+        </div>
+        <div class="session-list" id="session-list"></div>
+        <div class="side-foot">
+          <button id="side-project" class="side-project">
+            <span class="folder-dot"></span>
+            <span id="side-project-name">Project</span>
+          </button>
+          <div class="side-note">Keys are encrypted by macOS and stay on this computer.</div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <div class="transcript-wrap" id="transcript-wrap">
+          <div class="transcript" id="transcript"></div>
+        </div>
+        <div class="composer-wrap">
+          <div class="composer" id="composer">
+            <textarea id="prompt" rows="1" placeholder="Ask CAELIX to build, fix, or explain something…" aria-label="Message"></textarea>
+            <div class="composer-bar">
+              <div class="composer-left">
+                <button id="attach-btn" class="icon-btn" title="Attach a file" aria-label="Attach a file">
+                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M9.8 4.6 5.2 9.2a2.2 2.2 0 0 0 3.1 3.1l4.6-4.6a3.6 3.6 0 0 0-5.1-5.1L3.5 6.9a5 5 0 0 0 7.1 7.1l2.2-2.2" stroke="currentColor" stroke-linecap="round"/></svg>
+                </button>
+                <button id="composer-mode" class="mini-chip">Ask</button>
+                <button id="composer-model" class="mini-chip model">gemini-2.5-flash</button>
+              </div>
+              <div class="composer-right">
+                <span id="stream-status" class="stream-status"></span>
+                <button id="send-btn" class="send-btn" title="Send" aria-label="Send">
+                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <button id="stop-btn" class="stop-btn hidden" title="Stop" aria-label="Stop">
+                  <svg width="12" height="12" viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" rx="1.5" fill="currentColor"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="composer-hint">CAELIX can make mistakes. Review changes before accepting them.</div>
+        </div>
+      </main>
+
+      <aside class="panel" id="panel">
+        <div class="panel-head">
+          <div class="panel-tabs">
+            <button class="panel-tab active" data-tab="changes">Changes</button>
+            <button class="panel-tab" data-tab="terminal">Terminal</button>
+          </div>
+          <button id="panel-close" class="icon-btn" title="Close panel" aria-label="Close panel">×</button>
+        </div>
+        <div class="panel-body" id="changes-view">
+          <div id="changes-list" class="changes-list"><div class="panel-empty">No changes yet</div></div>
+        </div>
+        <div class="panel-body hidden" id="terminal-view">
+          <div class="terminal" id="terminal"></div>
+          <div class="terminal-input">
+            <span>$</span>
+            <input id="terminal-cmd" placeholder="Run a command in this folder" aria-label="Terminal command">
+            <button id="terminal-run">Run</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <div id="keys-screen" class="overlay hidden">
+    <div class="keys-card">
+      <button id="keys-close" class="icon-btn keys-close" aria-label="Close keys">×</button>
+      <div class="keys-head">
+        <img src="../../assets/icon-1024.png" alt="">
+        <div>
+          <h1>Keys</h1>
+          <p>Paste a provider key. It is encrypted with the macOS keychain, stored outside this project and shown only as a mask.</p>
+        </div>
+      </div>
+      <div id="key-rows" class="key-rows"></div>
+      <div class="keys-foot">
+        <span class="lock-dot"></span>
+        Keys are never written to logs, screenshots or Git.
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="app.js"></script>
+</body>
+</html>

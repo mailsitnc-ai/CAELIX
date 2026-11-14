@@ -1,0 +1,22 @@
+{
+  "name": "caelix",
+  "productName": "CAELIX",
+  "version": "0.1.0",
+  "description": "CAELIX — a fast, local coding agent built around a complete harness and a Code workspace.",
+  "main": "src/main.js",
+  "private": true,
+  "author": "CAELIX",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "selfcheck": "CAELIX_SELFCHECK=1 electron .",
+    "doctor": "node src/cli.js doctor",
+    "cli": "node src/cli.js"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0"
+  },
+  "allowScripts": {
+    "electron@38.8.6": true
+  }
+}
