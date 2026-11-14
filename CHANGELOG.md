@@ -1,7 +1,11 @@
 # CAELIX changelog
 
-## 0.1.9 (Chat | Code switcher & folder picker updates)
+## 0.1.9 (Rate-limit key rotation, permission safety, Copy buttons & Task Summaries)
 
+- Added **multi-key API rotation pools** (`src/store.js` `KeyStore`, `src/engine/index.js` `Engine.pickKey`/`callKeyed`, Keys modal `+ Add` & comma-separated paste + key chips): save 3–12 API keys per provider so hitting `429` (or quota/auth errors) switches immediately to the next healthy key with `0 ms` delay before falling back to countdown sleep when all keys are cooling down.
+- Added curated **lightweight, long-context models** (`meta-llama/llama-4-scout-17b-16e-instruct` Groq default, `llama-3.1-8b-instant`, `qwen/qwen3-32b`, `moonshotai/kimi-k2-instruct`, Gemini `gemini-2.5-flash-lite` / `flash`, NVIDIA `nemotron-3.5-lightning-30b-a3b`) with capability hints in the Model menu, normalized hallucinated OpenAI/Harmony tool aliases (`repo_browser.list_dir` -> `list_dir`, `open_file` -> `read_file`, etc.), and trimmed older tool results (`> 4` turns old) before sending to avoid blowing free-tier TPM limits.
+- Fixed permission handling so interactive prompts wait properly (`30 min` timeout instead of silent `2 min` auto-deny), clean up immediately on Stop (`chat:stop`), avoid duplicate permission DOM IDs, and **halt queued actions & rounds** if permission is denied so tasks never run behind your back.
+- Added **Copy** buttons to assistant messages, user messages (hover), error cards (`Copy error`), and task summaries, plus automatic **`Summary` cards** (actions succeeded/failed, files read/changed, duration, and failure/pause reason) persisted across completions, cancellations, round limits (`15`), and errors.
 - Added a **`Chat | </> Code`** workspace switcher in the top bar (plus `/chat` and `/code` slash commands) persisted via `settings:set`: **Chat** mode gives a distraction-free conversation layout, while **Code** mode shows the full right-hand `Changes`, `Terminal`, and `Context` panel.
 - Kept **MCP servers, Skills (`CAELIX.md` / `Project memory`), Lifecycle Hooks, and Agents** active across **both** Chat and Code modes, with quick capability pills in the Chat empty state.
 - Added a centered **Code workspace folder** card in empty Code sessions showing recent project folders (clickable to switch immediately) and a **Choose folder…** button (plus `/folder`).

@@ -522,6 +522,57 @@ function toolCard(options) {
   return card;
 }
 
+function attachCopyButton(button, getText) {
+  if (!button) return;
+  button.addEventListener('click', async (event) => {
+    event.stopPropagation();
+    const text = String(getText() || '');
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      const prev = button.textContent;
+      button.textContent = 'Copied';
+      setTimeout(() => { button.textContent = prev; }, 1200);
+    } catch {
+      toast('Clipboard unavailable.');
+    }
+  });
+}
+
+function buildUserMessageNode(content, attachments = []) {
+  const node = document.createElement('div');
+  node.className = 'msg user';
+  const atts = Array.isArray(attachments) && attachments.length
+    ? `<div class="msg-attachments">${attachments.map((att) => `<span class="msg-att">${escapeHtml(att.name)}</span>`).join('')}</div>`
+    : '';
+  node.innerHTML = `<div class="bubble">${atts}${escapeHtml(content)}</div><button type="button" class="msg-user-copy" title="Copy message">Copy</button>`;
+  attachCopyButton(node.querySelector('.msg-user-copy'), () => content);
+  return node;
+}
+
+function appendTurnSummaryCard(summary, container) {
+  if (!summary || !summary.markdown || !container) return null;
+  const card = document.createElement('div');
+  card.className = `turn-summary-card ${summary.status || 'completed'}`;
+  const sec = ((summary.elapsedMs || 0) / 1000).toFixed(1);
+  const label = summary.status === 'failed'
+    ? `Failed · ${summary.completedCount || 0} completed · ${sec}s`
+    : summary.status === 'stopped'
+      ? `Stopped · ${summary.completedCount || 0} completed · ${sec}s`
+      : summary.status === 'paused'
+        ? `Paused · awaiting permission · ${sec}s`
+        : `Summary · ${summary.completedCount || 0} action(s) · ${sec}s`;
+  card.innerHTML = `
+    <div class="turn-summary-head">
+      <span>${escapeHtml(label)}</span>
+      <button type="button" class="turn-summary-copy">Copy summary</button>
+    </div>
+    <div class="md">${renderMarkdown(summary.markdown)}</div>`;
+  attachCopyButton(card.querySelector('.turn-summary-copy'), () => summary.markdown);
+  container.appendChild(card);
+  return card;
+}
+
 function updateToolCard(id, { ok, output, durationMs }) {
   const card = document.getElementById(`tool-${id}`);
   if (!card) return;
@@ -548,13 +599,7 @@ function renderTranscript() {
   for (const message of session.messages) {
     if (message.role === 'tool' || message.hidden) continue;
     if (message.role === 'user') {
-      const node = document.createElement('div');
-      node.className = 'msg user';
-      const atts = Array.isArray(message.attachments) && message.attachments.length
-        ? `<div class="msg-attachments">${message.attachments.map((att) => `<span class="msg-att">${escapeHtml(att.name)}</span>`).join('')}</div>`
-        : '';
-      node.innerHTML = `<div class="bubble">${atts}${escapeHtml(message.content)}</div>`;
-      transcript.appendChild(node);
+      transcript.appendChild(buildUserMessageNode(message.content, message.attachments));
       continue;
     }
     if (message.role === 'assistant') {
@@ -562,7 +607,8 @@ function renderTranscript() {
       node.className = 'msg assistant';
       const body = document.createElement('div');
       body.className = 'assistant-body';
-      body.innerHTML = `<div class="msg-label"><img src="../../assets/icon-1024.png" alt="">CAELIX</div><div class="md">${renderMarkdown(message.content || '')}</div>`;
+      body.innerHTML = `<div class="msg-label"><img src="../../assets/icon-1024.png" alt=""><span>CAELIX</span><button type="button" class="msg-copy-btn" title="Copy reply">Copy</button></div><div class="md">${renderMarkdown(message.content || '')}</div>`;
+      attachCopyButton(body.querySelector('.msg-copy-btn'), () => message.content || message.turnSummary?.markdown || body.querySelector('.md')?.innerText || '');
       for (const call of message.toolCalls || []) {
         const result = results.get(call.id);
         body.appendChild(toolCard({
@@ -574,6 +620,7 @@ function renderTranscript() {
           ok: result ? !String(result.content).startsWith('Error:') : null,
         }));
       }
+      if (message.turnSummary) appendTurnSummaryCard(message.turnSummary, body);
       node.appendChild(body);
       transcript.appendChild(node);
     }
@@ -821,6 +868,7 @@ function renderKeys() {
   rows.innerHTML = '';
   for (const provider of state.keys) {
     const configured = Boolean(provider.masked);
+    const masks = Array.isArray(provider.masks) ? provider.masks : (provider.masked ? [provider.masked] : []);
     const row = document.createElement('div');
     row.className = 'key-row';
     row.id = `key-row-${provider.id}`;
@@ -833,11 +881,13 @@ function renderKeys() {
       </div>
       ${provider.keyless ? '' : `
       <div class="key-input-row">
-        <input id="key-input-${provider.id}" type="password" autocomplete="off" spellcheck="false" placeholder="${configured ? 'Paste a new key to replace it' : 'Paste your key'}">
+        <input id="key-input-${provider.id}" type="password" autocomplete="off" spellcheck="false" placeholder="${configured ? 'Paste another key (or comma-separated keys) to rotate' : 'Paste key(s) — comma-separate 3–6 keys to rotate'}">
         <button id="key-save-${provider.id}" class="primary">Save</button>
+        <button id="key-add-${provider.id}" title="Add key(s) to rotation pool">+ Add</button>
         <button id="key-test-${provider.id}">Test</button>
         ${configured ? `<button id="key-delete-${provider.id}">Delete</button>` : ''}
       </div>
+      ${masks.length > 1 || masks.length === 1 ? `<div class="key-pool" id="key-pool-${provider.id}">${masks.map((m, idx) => `<span class="key-chip">${escapeHtml(m)}<button type="button" data-rm-provider="${provider.id}" data-rm-idx="${idx}" title="Remove this key">×</button></span>`).join('')}</div>` : ''}
       <div class="key-hint" id="key-hint-${provider.id}"></div>`}
     `;
     rows.appendChild(row);
@@ -845,30 +895,32 @@ function renderKeys() {
     if (!provider.keyless) {
       const input = $(`#key-input-${provider.id}`);
       const hint = $(`#key-hint-${provider.id}`);
-      $(`#key-save-${provider.id}`).addEventListener('click', async () => {
+      const saveHandler = async (append) => {
         const value = input.value.trim();
         if (!value) { hint.textContent = 'Paste a key first.'; return; }
         try {
-          await api.invoke('keys:save', { provider: provider.id, key: value });
+          const res = await api.invoke('keys:save', { provider: provider.id, key: value, append });
           input.value = '';
-          hint.textContent = 'Saved, encrypted by macOS.';
+          hint.textContent = res.count > 1 ? `Saved ${res.count} encrypted keys for automatic rotation.` : 'Saved, encrypted by macOS.';
           await refreshKeys();
           api.invoke('providers:refresh', { provider: provider.id })
-            .then((res) => {
+            .then((refreshed) => {
               const target = state.providers.find((item) => item.id === provider.id);
-              if (target && Array.isArray(res?.models)) target.models = res.models;
+              if (target && Array.isArray(refreshed?.models)) target.models = refreshed.models;
             })
             .catch(() => {});
         } catch (error) {
           hint.textContent = error.message;
         }
-      });
+      };
+      $(`#key-save-${provider.id}`).addEventListener('click', () => saveHandler(false));
+      $(`#key-add-${provider.id}`)?.addEventListener('click', () => saveHandler(true));
       $(`#key-test-${provider.id}`).addEventListener('click', async () => {
         hint.textContent = 'Testing…';
         try {
           const model = state.session?.provider === provider.id ? state.session.model : undefined;
-          await api.invoke('keys:test', { provider: provider.id, key: input.value.trim() || undefined, model });
-          hint.textContent = 'Key accepted. It can reach the model.';
+          const res = await api.invoke('keys:test', { provider: provider.id, key: input.value.trim() || undefined, model });
+          hint.textContent = res?.message || 'Key accepted. It can reach the model.';
         } catch (error) {
           hint.textContent = error.message;
         }
@@ -879,6 +931,13 @@ function renderKeys() {
           await api.invoke('keys:delete', { provider: provider.id });
           await refreshKeys();
           toast('Key deleted.');
+        });
+      }
+      for (const rm of $$('[data-rm-provider]', row)) {
+        rm.addEventListener('click', async () => {
+          await api.invoke('keys:remove-one', { provider: rm.dataset.rmProvider, index: Number(rm.dataset.rmIdx) });
+          await refreshKeys();
+          toast('Removed key from rotation pool.');
         });
       }
     }
@@ -978,7 +1037,8 @@ function ensureLiveAssistant() {
   node.className = 'msg assistant';
   const body = document.createElement('div');
   body.className = 'assistant-body';
-  body.innerHTML = '<div class="msg-label"><img src="../../assets/icon-1024.png" alt="">CAELIX</div><div class="md"><span class="typing"><i></i><i></i><i></i></span></div>';
+  body.innerHTML = '<div class="msg-label"><img src="../../assets/icon-1024.png" alt=""><span>CAELIX</span><button type="button" class="msg-copy-btn" title="Copy reply">Copy</button></div><div class="md"><span class="typing"><i></i><i></i><i></i></span></div>';
+  attachCopyButton(body.querySelector('.msg-copy-btn'), () => body.dataset.rawText || body.querySelector('.md')?.innerText || '');
   node.appendChild(body);
   $('#transcript').appendChild(node);
   state.currentAssistant = { node, body, md: $('.md', body) };
@@ -988,6 +1048,7 @@ function ensureLiveAssistant() {
 
 function paintLive() {
   if (!state.currentAssistant) return;
+  state.currentAssistant.body.dataset.rawText = state.liveText;
   state.currentAssistant.md.innerHTML = renderMarkdown(state.liveText) || '<span class="typing"><i></i><i></i><i></i></span>';
   scrollToBottom();
 }
@@ -1002,9 +1063,15 @@ function scheduleLivePaint() {
 
 function appendPermission(request) {
   if (!state.currentAssistant) ensureLiveAssistant();
+  const prev = document.getElementById('permission-card');
+  if (prev) {
+    prev.removeAttribute('id');
+    prev.querySelectorAll('[id]').forEach((el) => el.removeAttribute('id'));
+  }
   const card = document.createElement('div');
   card.className = 'permission-card';
   card.id = 'permission-card';
+  card.dataset.permissionId = request.id;
   const target = request.target || request.detail || '';
   card.innerHTML = `
     <div class="permission-title"><span>◆</span>${escapeHtml(request.action || 'Permission needed')}</div>
@@ -1019,7 +1086,7 @@ function appendPermission(request) {
       const decision = button.dataset.decision;
       for (const other of $$('button', card)) other.disabled = true;
       card.querySelector('.permission-detail').textContent = decision === 'deny'
-        ? 'Cancelled. The model receives the refusal.'
+        ? 'Cancelled. Remaining actions in this step stopped.'
         : decision === 'session'
           ? 'Allowed for this session. The same action will not ask again.'
           : 'Allowed once. Running the action…';
@@ -1097,19 +1164,19 @@ function appendError(message) {
   const msg = document.createElement('div');
   msg.textContent = message;
   card.appendChild(msg);
-  if (/401|403|404|408|key|billing|free tier|quota|permission_denied|not found for account|did not respond|timed out|stalled/i.test(message)) {
-    const actions = document.createElement('div');
-    actions.className = 'error-actions';
-    actions.innerHTML = '<button type="button" data-err-action="keys">Open Keys</button><button type="button" data-err-action="model">Switch Model</button>';
-    actions.querySelector('[data-err-action="keys"]').addEventListener('click', openKeys);
-    actions.querySelector('[data-err-action="model"]').addEventListener('click', (event) => {
-      event.stopPropagation();
-      const menu = $('#model-menu');
-      menu.classList.remove('hidden');
-      renderModelMenu();
-    });
-    card.appendChild(actions);
-  }
+  const actions = document.createElement('div');
+  actions.className = 'error-actions';
+  const showRecovery = /401|403|404|408|429|rate.?limit|key|billing|free tier|quota|permission_denied|not found for account|did not respond|timed out|stalled/i.test(message);
+  actions.innerHTML = `${showRecovery ? '<button type="button" data-err-action="keys">Open Keys</button><button type="button" data-err-action="model">Switch Model</button>' : ''}<button type="button" data-err-action="copy">Copy error</button>`;
+  actions.querySelector('[data-err-action="keys"]')?.addEventListener('click', openKeys);
+  actions.querySelector('[data-err-action="model"]')?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const menu = $('#model-menu');
+    menu.classList.remove('hidden');
+    renderModelMenu();
+  });
+  attachCopyButton(actions.querySelector('[data-err-action="copy"]'), () => message);
+  card.appendChild(actions);
   if (state.currentAssistant) state.currentAssistant.body.appendChild(card);
   else $('#transcript').appendChild(card);
   scrollToBottom();
@@ -1233,6 +1300,19 @@ function onChatEvent(event) {
     case 'permission-request':
       appendPermission(event);
       break;
+    case 'permission-resolved': {
+      const card = document.querySelector(`[data-permission-id="${event.id}"]`);
+      if (card) {
+        for (const button of $$('button', card)) button.disabled = true;
+        const detail = card.querySelector('.permission-detail');
+        if (detail) {
+          detail.textContent = event.reason === 'stopped'
+            ? 'Stopped while waiting for permission.'
+            : 'Permission prompt timed out.';
+        }
+      }
+      break;
+    }
     case 'question-request':
       appendQuestion(event);
       break;
@@ -1302,6 +1382,9 @@ function onChatEvent(event) {
       if (event.compacted) toast(`Compacted ${event.compacted} older message(s) to fit the context window.`);
       if (state.currentAssistant) {
         if (!state.liveText) state.currentAssistant.md.innerHTML = '';
+        if (event.summary && !event.error) {
+          appendTurnSummaryCard(event.summary, state.currentAssistant.body);
+        }
       }
       {
         const tokens = event.usage?.total_tokens || event.estimatedTokens;
@@ -1317,6 +1400,9 @@ function onChatEvent(event) {
     case 'error':
       setStreaming(false);
       appendError(event.message);
+      if (event.summary) {
+        appendTurnSummaryCard(event.summary, state.currentAssistant ? state.currentAssistant.body : $('#transcript'));
+      }
       if (state.currentAssistant) {
         state.currentAssistant = null;
         state.liveText = '';
@@ -1579,12 +1665,7 @@ async function sendMessage() {
   state.session.messages.push({ role: 'user', content: finalPrompt, attachments });
   const current = $('#transcript');
   if ($('.empty-state', current)) current.innerHTML = '';
-  const node = document.createElement('div');
-  node.className = 'msg user';
-  const atts = attachments.length
-    ? `<div class="msg-attachments">${attachments.map((att) => `<span class="msg-att">${escapeHtml(att.name)}</span>`).join('')}</div>`
-    : '';
-  node.innerHTML = `<div class="bubble">${atts}${escapeHtml(finalPrompt)}</div>`;
+  const node = buildUserMessageNode(finalPrompt, attachments);
   current.appendChild(node);
   scrollToBottom(true);
   setStreaming(true);
@@ -1846,7 +1927,9 @@ function renderModelMenu(filter = '') {
     chunks.push(`<div class="pop-section">${escapeHtml(provider.name)} (${models.length})</div>`);
     for (const model of models) {
       const active = state.session && state.session.provider === provider.id && state.session.model === model;
-      chunks.push(`<button class="pop-item${active ? ' active' : ''}" data-provider="${provider.id}" data-model="${escapeHtml(model)}"><span class="pop-dot" style="background:${provider.color}"></span><span><span class="pop-title">${escapeHtml(model)}</span><span class="pop-sub">${active ? 'Current model' : escapeHtml(provider.name)}</span></span></button>`);
+      const note = provider.modelNotes?.[model];
+      const sub = active ? `Current model${note ? ` · ${note}` : ''}` : (note || provider.name);
+      chunks.push(`<button class="pop-item${active ? ' active' : ''}" data-provider="${provider.id}" data-model="${escapeHtml(model)}"><span class="pop-dot" style="background:${provider.color}"></span><span><span class="pop-title">${escapeHtml(model)}</span><span class="pop-sub">${escapeHtml(sub)}</span></span></button>`);
     }
   }
   chunks.push('<div class="pop-custom"><input id="custom-model" placeholder="Use any model ID"><button id="custom-model-use">Use</button></div>');

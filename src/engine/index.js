@@ -22,6 +22,79 @@ function estimateTokens(text) {
   return Math.max(1, Math.round(String(text || '').length / 4));
 }
 
+const TOOL_ALIASES = {
+  'repo_browser.list_dir': 'list_dir',
+  list_directory: 'list_dir',
+  ls: 'list_dir',
+  'repo_browser.open_file': 'read_file',
+  'repo_browser.read_file': 'read_file',
+  open_file: 'read_file',
+  view_file: 'read_file',
+  'repo_browser.search': 'grep',
+  'repo_browser.grep': 'grep',
+  search_files: 'grep',
+  'repo_browser.find': 'glob',
+  find_files: 'glob',
+  shell: 'bash',
+  run_command: 'bash',
+};
+
+function normalizeToolCall(call) {
+  let name = String(call?.name || '').trim();
+  if (name.startsWith('functions.')) name = name.slice('functions.'.length);
+  else if (name.startsWith('tools.')) name = name.slice('tools.'.length);
+  if (TOOL_ALIASES[name]) name = TOOL_ALIASES[name];
+  const rawInput = call?.input && typeof call.input === 'object' ? { ...call.input } : {};
+  if ((name === 'read_file' || name === 'list_dir') && !rawInput.path) {
+    rawInput.path = rawInput.file_path || rawInput.filename || rawInput.dir || rawInput.directory || (name === 'list_dir' ? '.' : undefined);
+  }
+  return { ...call, name, input: rawInput };
+}
+
+function buildTurnSummary({ status, elapsedMs, stepsLog = [], changes = [], error = null }) {
+  const completed = stepsLog.filter((s) => s.ok);
+  const failed = stepsLog.filter((s) => !s.ok);
+  const filesRead = [...new Set(
+    completed
+      .filter((s) => s.name === 'read_file' && s.target)
+      .map((s) => s.target),
+  )].slice(0, 12);
+  const filesChanged = [...new Set(changes.map((c) => c.file).filter(Boolean))].slice(0, 12);
+  const toolCounts = new Map();
+  for (const s of completed) {
+    toolCounts.set(s.name, (toolCounts.get(s.name) || 0) + 1);
+  }
+  const toolsList = [...toolCounts.entries()].map(([name, count]) => (count > 1 ? `${name} ×${count}` : name));
+  const sec = ((elapsedMs || 0) / 1000).toFixed(1);
+  const titleMap = {
+    completed: 'Task summary',
+    stopped: 'Task stopped — partial summary',
+    paused: 'Paused awaiting permission — partial summary',
+    failed: 'Task failed — summary of progress',
+  };
+  const lines = [`**${titleMap[status] || 'Task summary'}** (${sec}s)`];
+  if (completed.length || failed.length) {
+    lines.push(`- **Actions:** ${completed.length} succeeded${failed.length ? `, ${failed.length} failed` : ''}${toolsList.length ? ` (${toolsList.join(', ')})` : ''}`);
+  }
+  if (filesRead.length) lines.push(`- **Files read:** ${filesRead.map((f) => `\`${f}\``).join(', ')}`);
+  if (filesChanged.length) lines.push(`- **Files changed:** ${filesChanged.map((f) => `\`${f}\``).join(', ')}`);
+  if (failed.length && !error) {
+    lines.push(`- **Issue:** ${failed[failed.length - 1].detail || failed[failed.length - 1].name}`);
+  }
+  if (error) lines.push(`- **Reason:** ${error}`);
+  return {
+    status,
+    elapsedMs: elapsedMs || 0,
+    completedCount: completed.length,
+    failedCount: failed.length,
+    filesRead,
+    filesChanged,
+    toolsUsed: toolsList,
+    reason: error || null,
+    markdown: lines.join('\n'),
+  };
+}
+
 const MEMORY_NAMES = ['CAELIX.md', 'AGENTS.md', path.join('.caelix', 'CAELIX.md')];
 const MEMORY_LIMIT = 12000;
 
@@ -109,6 +182,50 @@ class Engine {
     this.terminals = new TerminalManager((event) => this.emit(event));
     this.controllers = new Map();
     this.allowances = new Map();
+    this.keyCursor = new Map();
+    this.keyCooldowns = new Map();
+  }
+
+  getKeyPool(providerId) {
+    if (!this.keys) return [];
+    const list = typeof this.keys.list === 'function' ? this.keys.list(providerId) : [];
+    if (Array.isArray(list) && list.length) return list;
+    const single = typeof this.keys.get === 'function' ? this.keys.get(providerId) : null;
+    return single ? [single] : [];
+  }
+
+  pickKey(providerId) {
+    const pool = this.getKeyPool(providerId);
+    if (!pool.length) return { key: null, index: -1, poolSize: 0, allCooled: false, shortestWaitMs: 0 };
+    const now = Date.now();
+    const start = (this.keyCursor.get(providerId) || 0) % pool.length;
+    let shortestWaitMs = Infinity;
+    for (let offset = 0; offset < pool.length; offset += 1) {
+      const idx = (start + offset) % pool.length;
+      const until = this.keyCooldowns.get(`${providerId}:${idx}`) || 0;
+      if (until <= now) {
+        this.keyCursor.set(providerId, idx);
+        return { key: pool[idx], index: idx, poolSize: pool.length, allCooled: false, shortestWaitMs: 0 };
+      }
+      shortestWaitMs = Math.min(shortestWaitMs, Math.max(500, until - now));
+    }
+    const idx = start;
+    return {
+      key: pool[idx],
+      index: idx,
+      poolSize: pool.length,
+      allCooled: true,
+      shortestWaitMs: Number.isFinite(shortestWaitMs) ? shortestWaitMs : 2000,
+    };
+  }
+
+  markKeyCooldown(providerId, index, ms = 60000) {
+    if (index < 0) return;
+    this.keyCooldowns.set(`${providerId}:${index}`, Date.now() + Math.max(0, Number(ms) || 0));
+    const pool = this.getKeyPool(providerId);
+    if (pool.length > 1) {
+      this.keyCursor.set(providerId, (index + 1) % pool.length);
+    }
   }
 
   isBusy(sessionId) {
@@ -201,13 +318,26 @@ class Engine {
   buildConversation(session, incoming) {
     const merged = [...(session.messages || []), ...(incoming || [])]
       .filter((message) => message && (message.role === 'user' || message.role === 'assistant' || message.role === 'tool'));
-    let history = merged.slice(-60).map((message) => ({
-      role: message.role,
-      content: message.content,
-      attachments: message.attachments,
-      toolCalls: message.toolCalls,
-      toolCallId: message.toolCallId,
-    }));
+    const slice = merged.slice(-60);
+    let toolSeenFromEnd = 0;
+    let history = slice.slice().reverse().map((message) => {
+      let content = message.content;
+      if (message.role === 'tool' && typeof content === 'string') {
+        toolSeenFromEnd += 1;
+        if (toolSeenFromEnd > 4 && content.length > 520) {
+          content = `${content.slice(0, 440)}\n… [earlier tool output trimmed to reduce TPM; full result saved in transcript]`;
+        } else if (content.length > 12000) {
+          content = `${content.slice(0, 11800)}\n… [truncated large tool output for context/TPM]`;
+        }
+      }
+      return {
+        role: message.role,
+        content,
+        attachments: message.attachments,
+        toolCalls: message.toolCalls,
+        toolCallId: message.toolCallId,
+      };
+    }).reverse();
     const system = { role: 'system', content: this.systemPrompt(session) };
     let total = estimateTokens(system.content);
     for (const message of history) total += estimateTokens(message.content || '');
@@ -254,6 +384,9 @@ class Engine {
     let usage = null;
     let compacted = 0;
 
+    const stepsLog = [];
+    let interactivePermissionDenied = false;
+
     const emit = (event) => this.emit({ sessionId, ...event });
     const runner = new ToolRunner({
       root: session.cwd,
@@ -265,7 +398,10 @@ class Engine {
         : null,
       ask: async (request) => {
         if (session.mode === 'plan' && request.risk !== 'read') return 'deny';
-        return this.ask({ sessionId, ...request });
+        const decision = await this.ask({ sessionId, ...request });
+        if (decision === 'abort') throw new Error('Cancelled.');
+        if (decision === 'deny') interactivePermissionDenied = true;
+        return decision;
       },
       emit: (event) => {
         if (event.type === 'change') changes.push(event);
@@ -294,7 +430,8 @@ class Engine {
       const mcpTools = this.mcp ? await this.mcp.toolDefinitions(session.cwd).catch(() => []) : [];
 
       let rounds = 0;
-      const maxRounds = 10;
+      const maxRounds = 15;
+      let haltedByPermission = false;
       while (rounds < maxRounds) {
         if (controller.signal.aborted) throw new Error('Cancelled.');
         rounds += 1;
@@ -317,10 +454,11 @@ class Engine {
 
         usage = result.usage || usage;
         if (result.compacted) compacted = result.compacted;
+        const normalizedCalls = (result.toolCalls || []).map((c) => normalizeToolCall(c));
         const assistant = {
           role: 'assistant',
           content: result.text || '',
-          toolCalls: result.toolCalls || [],
+          toolCalls: normalizedCalls,
           id: `msg_${Date.now()}_${rounds}`,
           createdAt: Date.now(),
         };
@@ -330,8 +468,10 @@ class Engine {
 
         for (const call of assistant.toolCalls) {
           if (controller.signal.aborted) throw new Error('Cancelled.');
+          interactivePermissionDenied = false;
           emit({ type: 'tool-start', id: call.id, name: call.name, input: call.input });
           const toolStarted = Date.now();
+          const toolTarget = call.input?.path || call.input?.command || call.input?.pattern || call.input?.url || '';
           try {
             if (this.hooks) {
               const preHook = await this.hooks.run('PreToolUse', {
@@ -369,6 +509,8 @@ class Engine {
               todos = output.todos;
               session.todos = output.todos;
             }
+            const durationMs = Date.now() - toolStarted;
+            stepsLog.push({ name: call.name, target: String(toolTarget || ''), ok: true, durationMs });
             emit({
               type: 'tool-result',
               id: call.id,
@@ -376,7 +518,7 @@ class Engine {
               ok: true,
               output: output.output,
               meta: output.meta,
-              durationMs: Date.now() - toolStarted,
+              durationMs,
             });
             messages.push({
               role: 'tool',
@@ -401,6 +543,9 @@ class Engine {
               });
             }
           } catch (error) {
+            if (controller.signal.aborted || /Cancelled\./i.test(error.message)) throw error;
+            const durationMs = Date.now() - toolStarted;
+            stepsLog.push({ name: call.name, target: String(toolTarget || ''), ok: false, durationMs, detail: error.message });
             if (this.hooks) {
               await this.hooks.run('PostToolUse', {
                 sessionId, cwd: session.cwd, tool: call.name, input: call.input, ok: false, output: error.message,
@@ -412,7 +557,7 @@ class Engine {
               name: call.name,
               ok: false,
               output: error.message,
-              durationMs: Date.now() - toolStarted,
+              durationMs,
             });
             messages.push({
               role: 'tool',
@@ -421,8 +566,58 @@ class Engine {
               id: `tool_${call.id}`,
               createdAt: Date.now(),
             });
+            if (interactivePermissionDenied) {
+              haltedByPermission = true;
+              break;
+            }
           }
         }
+        if (haltedByPermission) break;
+      }
+
+      const lastMsg = messages[messages.length - 1];
+      const needsFinalSynthesis = !haltedByPermission && rounds >= maxRounds && lastMsg?.role === 'tool'
+        && session.provider !== 'simulator' && session.provider !== 'claude' && !controller.signal.aborted;
+      if (needsFinalSynthesis) {
+        try {
+          const synth = await this.callKeyed({
+            session,
+            messages: [...messages, {
+              role: 'user',
+              content: 'Stop calling tools now and provide a clear, concise final summary of everything you found and accomplished so far.',
+            }],
+            extraTools: [],
+            disableTools: true,
+            emit,
+            signal: controller.signal,
+          });
+          if (synth.text) {
+            messages.push({
+              role: 'assistant',
+              content: synth.text,
+              toolCalls: [],
+              id: `msg_${Date.now()}_final`,
+              createdAt: Date.now(),
+            });
+          }
+        } catch {
+          /* deterministic turnSummary below will still summarize everything done */
+        }
+      }
+
+      const summaryStatus = haltedByPermission ? 'paused' : 'completed';
+      const summary = stepsLog.length || changes.length || haltedByPermission
+        ? buildTurnSummary({
+          status: summaryStatus,
+          elapsedMs: Date.now() - started,
+          stepsLog,
+          changes,
+          error: haltedByPermission ? 'Stopped queued actions after permission was cancelled.' : null,
+        })
+        : null;
+      if (summary) {
+        const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
+        if (lastAssistant) lastAssistant.turnSummary = summary;
       }
 
       this.allowances.set(sessionId, runner.sessionAllowed || new Set());
@@ -454,38 +649,56 @@ class Engine {
         compacted,
         context,
         checkpoint,
+        summary,
         saved: Boolean(saved),
       });
       emit({ type: 'context', report: context, compacted });
-      return { ok: true };
+      return { ok: true, summary };
     } catch (error) {
+      const wasCancelled = controller.signal.aborted || /Cancelled\./i.test(error.message);
+      const summary = stepsLog.length || changes.length || wasCancelled || error
+        ? buildTurnSummary({
+          status: wasCancelled ? 'stopped' : 'failed',
+          elapsedMs: Date.now() - started,
+          stepsLog,
+          changes,
+          error: error.message,
+        })
+        : null;
       if (messages.length) {
+        if (summary) {
+          const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
+          if (lastAssistant) lastAssistant.turnSummary = summary;
+          else messages.push({ role: 'assistant', content: '', toolCalls: [], turnSummary: summary, id: `msg_${Date.now()}_summary`, createdAt: Date.now() });
+        }
         this.sessions.saveTurn(sessionId, messages, { changes, terminal, todos });
       }
-      emit({ type: 'error', message: error.message, elapsedMs: Date.now() - started });
-      emit({ type: 'done', error: error.message, elapsedMs: Date.now() - started, changes });
-      return { ok: false, error: error.message };
+      emit({ type: 'error', message: error.message, elapsedMs: Date.now() - started, summary });
+      emit({ type: 'done', error: error.message, elapsedMs: Date.now() - started, changes, summary });
+      return { ok: false, error: error.message, summary };
     } finally {
       this.controllers.delete(sessionId);
     }
   }
 
-  async callKeyed({ session, messages, extraTools = [], emit, signal }) {
+  async callKeyed({ session, messages, extraTools = [], disableTools = false, emit, signal }) {
     const provider = PROVIDERS[session.provider];
-    const key = this.keys.get(session.provider);
-    if (!key) throw new Error(`No ${provider.name} key is saved. Open Keys and add one.`);
+    const pool = this.getKeyPool(session.provider);
+    if (!pool.length) throw new Error(`No ${provider.name} key is saved. Open Keys and add one.`);
     const { messages: conversation, compacted } = this.buildConversation(session, messages);
-    const tools = [...toolDefinitions(session.cwd), ...extraTools];
+    const tools = disableTools ? [] : [...toolDefinitions(session.cwd), ...extraTools];
     let emitted = false;
-    let attempt = 0;
+    let sleepAttempt = 0;
+    let rotationCount = 0;
 
     for (;;) {
+      const picked = this.pickKey(session.provider);
       let textOut = '';
       try {
         const result = await streamOpenAICompatible({
           provider: session.provider,
           model: session.model,
-          apiKey: key,
+          apiKey: picked.key,
           messages: conversation,
           tools,
           signal,
@@ -503,18 +716,38 @@ class Engine {
         if (signal?.aborted) throw new Error('Cancelled.');
         const status = Number(error.status || (String(error.message).match(/returned (\d{3})/) || [])[1] || 0);
         const isRateLimit = status === 429;
+        const isKeyAuthOrQuota = isRateLimit || status === 401 || status === 402 || status === 403;
         const retryable = isRateLimit || status === 408 || status >= 500
           || /fetch failed|network|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(error.message);
-        const maxAttempts = isRateLimit ? 5 : 2;
-        if (!retryable || error.noRetry || emitted || attempt >= maxAttempts) throw error;
-        attempt += 1;
         const fast = process.env.CAELIX_FAST_RETRY === '1';
-        const defaultWait = isRateLimit ? Math.min(45_000, 2000 * 2 ** (attempt - 1)) : 600 * 2 ** (attempt - 1);
+
+        if (isKeyAuthOrQuota && pool.length > 1 && !emitted && rotationCount < pool.length * 2) {
+          const coolMs = fast ? 120 : (isRateLimit ? (error.retryAfterMs || 60_000) : 300_000);
+          this.markKeyCooldown(session.provider, picked.index, coolMs);
+          rotationCount += 1;
+          const next = this.pickKey(session.provider);
+          if (!next.allCooled) {
+            emit({
+              type: 'status',
+              stage: 'rotate',
+              message: `${provider.name} key #${picked.index + 1} hit ${status || 'limit'} — switched to key #${next.index + 1} of ${pool.length}…`,
+            });
+            continue;
+          }
+        }
+
+        const maxAttempts = isRateLimit ? 5 : 2;
+        if (!retryable || error.noRetry || emitted || sleepAttempt >= maxAttempts) throw error;
+        sleepAttempt += 1;
+        const defaultWait = isRateLimit ? Math.min(45_000, 2000 * 2 ** (sleepAttempt - 1)) : 600 * 2 ** (sleepAttempt - 1);
         const waitMs = fast ? 120 : (error.retryAfterMs || defaultWait);
-        const reason = isRateLimit ? 'Rate limit hit (429)' : status ? `Server error (${status})` : 'Connection error';
-        emit({ type: 'retry', attempt, maxAttempts, waitMs, remainingMs: waitMs, status, reason, message: error.message });
+        if (isRateLimit) this.markKeyCooldown(session.provider, picked.index, waitMs);
+        const reason = pool.length > 1 && isRateLimit
+          ? `All ${pool.length} API keys cooling down`
+          : isRateLimit ? 'Rate limit hit (429)' : status ? `Server error (${status})` : 'Connection error';
+        emit({ type: 'retry', attempt: sleepAttempt, maxAttempts, waitMs, remainingMs: waitMs, status, reason, message: error.message });
         await sleepAbortable(waitMs, signal, (remainingMs) => {
-          emit({ type: 'retry', attempt, maxAttempts, waitMs, remainingMs, status, reason, message: error.message });
+          emit({ type: 'retry', attempt: sleepAttempt, maxAttempts, waitMs, remainingMs, status, reason, message: error.message });
         });
       }
     }
@@ -549,8 +782,8 @@ class Engine {
       summary = await this.claudeSubagent(session, `${profile.prompt}\n\nTask: ${task}`, signal);
     } else {
       const provider = PROVIDERS[session.provider];
-      const key = this.keys.get(session.provider);
-      if (!key) throw new Error(`No ${provider.name} key is saved.`);
+      const pool = this.getKeyPool(session.provider);
+      if (!pool.length) throw new Error(`No ${provider.name} key is saved.`);
       const agentTools = toolDefinitions(session.cwd)
         .filter((tool) => allowedSet.has(tool.name));
       const conversation = [
@@ -560,21 +793,35 @@ class Engine {
       let rounds = 0;
       while (rounds < maxRounds) {
         rounds += 1;
-        const result = await streamOpenAICompatible({
-          provider: session.provider,
-          model: session.model,
-          apiKey: key,
-          messages: conversation,
-          tools: agentTools,
-          signal,
-          onDelta: () => {},
-        });
-        if (!result.toolCalls.length) {
+        let result = null;
+        for (let rot = 0; rot <= pool.length; rot += 1) {
+          const picked = this.pickKey(session.provider);
+          try {
+            result = await streamOpenAICompatible({
+              provider: session.provider,
+              model: session.model,
+              apiKey: picked.key,
+              messages: conversation,
+              tools: agentTools,
+              signal,
+              onDelta: () => {},
+            });
+            break;
+          } catch (err) {
+            if (Number(err.status) === 429 && pool.length > 1 && rot < pool.length) {
+              this.markKeyCooldown(session.provider, picked.index, err.retryAfterMs || 60_000);
+              continue;
+            }
+            throw err;
+          }
+        }
+        const normCalls = (result.toolCalls || []).map((c) => normalizeToolCall(c));
+        if (!normCalls.length) {
           summary = result.text || '';
           break;
         }
-        conversation.push({ role: 'assistant', content: result.text || '', toolCalls: result.toolCalls });
-        for (const item of result.toolCalls) {
+        conversation.push({ role: 'assistant', content: result.text || '', toolCalls: normCalls });
+        for (const item of normCalls) {
           emit({ type: 'subagent-event', parentId: call.id, tool: item.name, target: item.input?.path || item.input?.pattern || item.input?.command || '.' });
           if (!allowedSet.has(item.name)) {
             conversation.push({ role: 'tool', toolCallId: item.id, content: `Error: tool ${item.name} is not enabled for agent ${profile.name}.` });
@@ -582,7 +829,7 @@ class Engine {
           }
           try {
             const output = await runner.execute(item.name, item.input);
-            conversation.push({ role: 'tool', toolCallId: item.id, content: output.output });
+            conversation.push({ role: 'tool', toolCallId: item.id, content: String(output.output || '').slice(0, 8000) });
           } catch (error) {
             conversation.push({ role: 'tool', toolCallId: item.id, content: `Error: ${error.message}` });
           }
@@ -644,7 +891,7 @@ class Engine {
       head.push(tail.shift());
     }
     let summaryText = '';
-    const key = PROVIDERS[session.provider]?.keyless ? null : this.keys.get(session.provider);
+    const key = PROVIDERS[session.provider]?.keyless ? null : this.pickKey(session.provider).key;
     if (key && session.provider !== 'simulator' && session.provider !== 'claude') {
       try {
         const transcriptSnippet = head
@@ -724,7 +971,7 @@ class Engine {
     if (session.provider === 'claude') {
       throw new Error('/btw inline side-questions are supported directly on API providers and simulator.');
     }
-    const key = this.keys.get(session.provider);
+    const key = this.pickKey(session.provider).key;
     if (!key) throw new Error(`No ${PROVIDERS[session.provider]?.name || session.provider} key is saved. Open Keys and add one.`);
     const { messages: conversation } = this.buildConversation(session, [{
       role: 'user',

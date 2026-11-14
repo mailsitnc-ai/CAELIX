@@ -225,11 +225,14 @@ async function run(context) {
       if (detail.inputType !== 'password') throw new Error('Key input is not masked.');
       if (detail.inputValue !== '') throw new Error('Key input still holds the value after save.');
       if (!detail.status.includes('\u2022')) throw new Error('Saved key is not shown as a mask.');
+      await setValue('#key-input-openrouter', 'sk-or-selfcheck-second');
+      await click('#key-add-openrouter');
+      await waitFor('document.querySelector("#key-status-openrouter")?.textContent.includes("(2 keys)")', 5000, 'multi-key pool saved');
       await waitFor('document.querySelector("#key-delete-openrouter")', 4000, 'delete button');
       await click('#key-delete-openrouter');
       await waitFor('document.querySelector("#key-status-openrouter")?.textContent === "Not saved"', 5000, 'key deleted');
       await click('#keys-close');
-      return detail.status;
+      return `${detail.status} (+ multi-key rotation tested)`;
     });
     await snap('keys screen');
 
@@ -624,7 +627,9 @@ async function run(context) {
       await waitFor('document.querySelector("#chat-title").textContent === "CAELIX self-check chat"', 8000, 'restored title');
       const messages = await evaluate('document.querySelectorAll(".msg").length');
       if (messages < 2) throw new Error('The conversation did not come back after reload.');
-      return `${messages} messages restored`;
+      const hasCopyAndSummary = await evaluate('document.querySelectorAll(".msg-copy-btn").length >= 1 && document.querySelectorAll(".turn-summary-card").length >= 1');
+      if (!hasCopyAndSummary) throw new Error('Expected message Copy button and Turn Summary card after reload.');
+      return `${messages} messages restored with Copy button and Task Summary`;
     });
     await snap('restored after reload');
   } catch (error) {

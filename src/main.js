@@ -125,13 +125,15 @@ function userData() {
 function requestPermission(request) {
   return new Promise((resolve) => {
     const id = `perm_${crypto.randomUUID()}`;
+    const timeoutMs = SELF_CHECK ? 120000 : 1800000;
     const timer = setTimeout(() => {
       if (pendingPermissions.has(id)) {
         pendingPermissions.delete(id);
+        emit({ type: 'permission-resolved', sessionId: request.sessionId, id, decision: 'deny', reason: 'timeout' });
         resolve('deny');
       }
-    }, 120000);
-    pendingPermissions.set(id, { resolve, timer });
+    }, timeoutMs);
+    pendingPermissions.set(id, { sessionId: request.sessionId, resolve, timer });
     emit({ type: 'permission-request', id, ...request });
   });
 }
@@ -141,20 +143,40 @@ function answerPermission(id, decision) {
   if (!pending) return false;
   pendingPermissions.delete(id);
   clearTimeout(pending.timer);
-  pending.resolve(decision === 'deny' ? 'deny' : decision === 'session' ? 'session' : 'allow');
+  const resolved = decision === 'abort' ? 'abort' : decision === 'deny' ? 'deny' : decision === 'session' ? 'session' : 'allow';
+  pending.resolve(resolved);
   return true;
+}
+
+function cancelSessionPrompts(sessionId) {
+  for (const [id, pending] of pendingPermissions.entries()) {
+    if (!sessionId || pending.sessionId === sessionId) {
+      pendingPermissions.delete(id);
+      clearTimeout(pending.timer);
+      emit({ type: 'permission-resolved', sessionId: pending.sessionId, id, decision: 'abort', reason: 'stopped' });
+      pending.resolve('abort');
+    }
+  }
+  for (const [id, pending] of pendingQuestions.entries()) {
+    if (!sessionId || pending.sessionId === sessionId) {
+      pendingQuestions.delete(id);
+      clearTimeout(pending.timer);
+      pending.resolve('Cancelled.');
+    }
+  }
 }
 
 function requestQuestion(request) {
   return new Promise((resolve) => {
     const id = `question_${crypto.randomUUID()}`;
+    const timeoutMs = SELF_CHECK ? 120000 : 1800000;
     const timer = setTimeout(() => {
       if (pendingQuestions.has(id)) {
         pendingQuestions.delete(id);
         resolve('No answer (timed out).');
       }
-    }, 600000);
-    pendingQuestions.set(id, { resolve, timer });
+    }, timeoutMs);
+    pendingQuestions.set(id, { sessionId: request.sessionId, resolve, timer });
     emit({ type: 'question-request', id, ...request });
   });
 }
@@ -401,25 +423,51 @@ function registerIpc() {
     return providerList(SELF_CHECK).map((provider) => ({
       ...provider,
       configured: mask.has(provider.id),
+      count: mask.get(provider.id)?.count || 0,
+      masks: mask.get(provider.id)?.masks || [],
       masked: mask.get(provider.id)?.masked || null,
     }));
   });
 
-  ipcMain.handle('keys:save', (_event, { provider, key }) => {
+  ipcMain.handle('keys:save', (_event, { provider, key, append = false }) => {
     if (!PROVIDERS[provider] || PROVIDERS[provider].keyless) throw new Error('That provider does not use a key.');
-    keys.set(provider, key);
-    return { provider, masked: keys.masked(provider) };
+    const count = append ? keys.add(provider, key) : keys.set(provider, key);
+    return { provider, count, masks: keys.masks(provider), masked: keys.masked(provider) };
+  });
+
+  ipcMain.handle('keys:add', (_event, { provider, key }) => {
+    if (!PROVIDERS[provider] || PROVIDERS[provider].keyless) throw new Error('That provider does not use a key.');
+    const count = keys.add(provider, key);
+    return { provider, count, masks: keys.masks(provider), masked: keys.masked(provider) };
+  });
+
+  ipcMain.handle('keys:remove-one', (_event, { provider, index }) => {
+    keys.removeAt(provider, Number(index));
+    return { provider, count: keys.list(provider).length, masks: keys.masks(provider), masked: keys.masked(provider) };
   });
 
   ipcMain.handle('keys:delete', (_event, { provider }) => {
     keys.delete(provider);
-    return { provider, masked: null };
+    return { provider, count: 0, masks: [], masked: null };
   });
 
   ipcMain.handle('keys:test', async (_event, { provider, key, model }) => {
-    const value = key || keys.get(provider);
-    if (!value) throw new Error('Paste a key first.');
-    await testKey(provider, value, model);
+    const pool = key ? [String(key).trim()] : keys.list(provider);
+    if (!pool.length) throw new Error('Paste a key first.');
+    let passed = 0;
+    let lastErr = null;
+    for (const candidate of pool) {
+      try {
+        await testKey(provider, candidate, model);
+        passed += 1;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    if (!passed) throw lastErr || new Error('Key test failed.');
+    if (pool.length > 1) {
+      return { ok: true, message: passed === pool.length ? `All ${pool.length} keys accepted.` : `${passed}/${pool.length} keys accepted (${lastErr?.message || 'one failed'}).` };
+    }
     return { ok: true, message: 'Key accepted.' };
   });
 
@@ -497,6 +545,7 @@ function registerIpc() {
   });
 
   ipcMain.handle('chat:stop', (_event, sessionId) => {
+    cancelSessionPrompts(sessionId);
     engine.stop(sessionId);
     return { stopped: true };
   });

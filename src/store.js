@@ -49,15 +49,76 @@ class KeyStore {
     atomicWrite(this.file, payload, 0o600);
   }
 
-  set(provider, key) {
-    const clean = String(key || '').trim();
-    if (clean.length < 8) throw new Error('That key looks too short.');
-    this.keys[provider] = clean;
-    this.persist();
+  static parseKeys(raw) {
+    const parts = String(raw || '')
+      .split(/[\r\n,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!parts.length) throw new Error('That key looks too short.');
+    const clean = [];
+    const seen = new Set();
+    for (const part of parts) {
+      if (part.length < 8) throw new Error('Each API key must be at least 8 characters.');
+      if (!seen.has(part)) {
+        seen.add(part);
+        clean.push(part);
+      }
+      if (clean.length >= 12) break;
+    }
+    return clean;
   }
 
-  get(provider) {
-    return this.keys[provider] || null;
+  list(provider) {
+    const entry = this.keys[provider];
+    if (!entry) return [];
+    const raw = Array.isArray(entry) ? entry : [entry];
+    const clean = [];
+    const seen = new Set();
+    for (const item of raw) {
+      const value = String(item || '').trim();
+      if (value.length >= 8 && !seen.has(value)) {
+        seen.add(value);
+        clean.push(value);
+      }
+    }
+    return clean;
+  }
+
+  set(provider, key) {
+    const parsed = KeyStore.parseKeys(key);
+    this.keys[provider] = parsed.length === 1 ? parsed[0] : parsed;
+    this.persist();
+    return parsed.length;
+  }
+
+  add(provider, key) {
+    const incoming = KeyStore.parseKeys(key);
+    const merged = [...this.list(provider)];
+    const seen = new Set(merged);
+    for (const item of incoming) {
+      if (!seen.has(item) && merged.length < 12) {
+        seen.add(item);
+        merged.push(item);
+      }
+    }
+    this.keys[provider] = merged.length === 1 ? merged[0] : merged;
+    this.persist();
+    return merged.length;
+  }
+
+  get(provider, index = 0) {
+    const pool = this.list(provider);
+    if (!pool.length) return null;
+    return pool[index % pool.length];
+  }
+
+  removeAt(provider, index) {
+    const pool = this.list(provider);
+    if (index < 0 || index >= pool.length) return;
+    pool.splice(index, 1);
+    if (!pool.length) delete this.keys[provider];
+    else this.keys[provider] = pool.length === 1 ? pool[0] : pool;
+    this.persist();
   }
 
   delete(provider) {
@@ -66,19 +127,30 @@ class KeyStore {
     this.persist();
   }
 
+  masks(provider) {
+    return this.list(provider).map((key) => `${'\u2022'.repeat(8)}${key.slice(-4)}`);
+  }
+
   masked(provider) {
-    const key = this.keys[provider];
-    if (!key) return null;
-    const tail = key.slice(-4);
-    return `${'\u2022'.repeat(8)}${tail}`;
+    const all = this.masks(provider);
+    if (!all.length) return null;
+    if (all.length === 1) return all[0];
+    return `${all[0]} (${all.length} keys)`;
   }
 
   status() {
-    return Object.keys(this.keys).map((provider) => ({
-      provider,
-      configured: true,
-      masked: this.masked(provider),
-    }));
+    return Object.keys(this.keys)
+      .filter((provider) => this.list(provider).length > 0)
+      .map((provider) => {
+        const masks = this.masks(provider);
+        return {
+          provider,
+          configured: true,
+          count: masks.length,
+          masks,
+          masked: this.masked(provider),
+        };
+      });
   }
 }
 

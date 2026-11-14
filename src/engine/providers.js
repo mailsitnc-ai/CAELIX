@@ -82,14 +82,17 @@ const PROVIDERS = {
     consoleUrl: 'https://console.groq.com/keys',
     baseUrl: 'https://api.groq.com/openai/v1/chat/completions',
     models: [
+      'meta-llama/llama-4-scout-17b-16e-instruct',
       'llama-3.3-70b-versatile',
-      'openai/gpt-oss-120b',
-      'openai/gpt-oss-20b',
-      'qwen/qwen3.8-27b',
+      'qwen/qwen3-32b',
       'llama-3.1-8b-instant',
+      'moonshotai/kimi-k2-instruct',
+      'openai/gpt-oss-20b',
+      'openai/gpt-oss-120b',
+      'qwen/qwen3.8-27b',
       'groq/compound',
     ],
-    defaultModel: 'llama-3.3-70b-versatile',
+    defaultModel: 'meta-llama/llama-4-scout-17b-16e-instruct',
     color: '#f55036',
   },
   claude: {
@@ -117,6 +120,22 @@ const PROVIDERS = {
   },
 };
 
+const MODEL_NOTES = {
+  'gemini-2.5-flash': 'Lightweight · 1M context',
+  'gemini-2.5-flash-lite': 'Ultra-lightweight · 1M context',
+  'gemini-2.5-pro': 'Deep reasoning · 1M context',
+  'meta-llama/llama-4-scout-17b-16e-instruct': 'Lightweight · Long context · High TPM',
+  'llama-3.1-8b-instant': 'Ultra-fast · High free TPM',
+  'llama-3.3-70b-versatile': 'Strong all-rounder · 128K',
+  'qwen/qwen3-32b': 'Compact coding & reasoning · 128K',
+  'moonshotai/kimi-k2-instruct': 'Long-context tool caller · 128K',
+  'openai/gpt-oss-120b': 'Heavy · Low free TPM (rotate keys)',
+  'deepseek-ai/deepseek-v4.1-flash': 'Fast · High-capacity NIM default',
+  'nvidia/nemotron-3.5-lightning-30b-a3b': 'Lightweight · Fast · Long context',
+  'nvidia/nemotron-nano-3-30b-a3b': 'Lightweight · Fast',
+  'google/gemini-2.5-flash': 'Lightweight · 1M context',
+};
+
 function providerList(selfcheck) {
   return Object.values(PROVIDERS)
     .filter((provider) => selfcheck || !provider.internal)
@@ -129,6 +148,7 @@ function providerList(selfcheck) {
       defaultModel: provider.defaultModel,
       keyless: Boolean(provider.keyless),
       color: provider.color,
+      modelNotes: MODEL_NOTES,
     }));
 }
 
