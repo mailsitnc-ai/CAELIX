@@ -16,6 +16,11 @@ function truncate(text, limit = MAX_OUTPUT) {
   return `${value.slice(0, limit)}\n… truncated ${value.length - limit} characters`;
 }
 
+function isProtectedPath(relative) {
+  const first = String(relative).split(path.sep)[0];
+  return first === '.git' || first === '.claude' || first === '.caelix';
+}
+
 function globToRegExp(pattern) {
   let out = '^';
   for (let i = 0; i < pattern.length; i += 1) {
@@ -303,8 +308,9 @@ class ToolRunner {
 
   async permission(tool, action, target, detail, risk = 'normal') {
     if (this.mode === 'plan' && risk !== 'read') return 'deny';
-    if (this.mode === 'bypass') return 'allow';
-    if (this.mode === 'accept' && (tool === 'write_file' || tool === 'edit_file' || tool === 'multi_edit')) return 'allow';
+    if (this.mode === 'bypass' && risk !== 'protected') return 'allow';
+    if (this.mode === 'accept' && risk !== 'protected'
+      && (tool === 'write_file' || tool === 'edit_file' || tool === 'multi_edit')) return 'allow';
     const key = `${tool}:${target}`;
     if (this.sessionAllowed?.has(key)) return 'allow';
     const decision = await this.ask({ tool, action, target, detail, risk });
@@ -365,7 +371,13 @@ class ToolRunner {
       before = '';
     }
     const after = String(input.content ?? '');
-    const decision = await this.permission('write_file', 'Write file', relative, `${after.split('\n').length} lines`, 'write');
+    const decision = await this.permission(
+      'write_file',
+      'Write file',
+      relative,
+      `${after.split('\n').length} lines`,
+      isProtectedPath(relative) ? 'protected' : 'write',
+    );
     if (decision !== 'allow') throw new Error('The user denied this write.');
     await fsp.mkdir(path.dirname(file), { recursive: true });
     await fsp.writeFile(file, after, 'utf8');
@@ -392,7 +404,13 @@ class ToolRunner {
     if (count === 0) throw new Error('The old text was not found.');
     if (count > 1 && !input.replace_all) throw new Error(`The old text occurs ${count} times. Provide more context or set replace_all.`);
     const after = input.replace_all ? before.split(oldString).join(newString) : before.replace(oldString, newString);
-    const decision = await this.permission('edit_file', 'Edit file', relative, `${count} replacement(s)`, 'write');
+    const decision = await this.permission(
+      'edit_file',
+      'Edit file',
+      relative,
+      `${count} replacement(s)`,
+      isProtectedPath(relative) ? 'protected' : 'write',
+    );
     if (decision !== 'allow') throw new Error('The user denied this edit.');
     await fsp.writeFile(file, after, 'utf8');
     const diff = diffLines(before, after);
@@ -433,12 +451,13 @@ class ToolRunner {
     }
     const changed = planned.filter((item) => item.before !== item.after);
     if (!changed.length) return { output: 'No file changed.', meta: { files: 0 } };
+    const targets = changed.map((item) => path.relative(this.root, item.file));
     const decision = await this.permission(
       'multi_edit',
       'Edit files',
-      changed.map((item) => path.relative(this.root, item.file)).join(', '),
+      targets.join(', '),
       `${edits.length} replacement(s) in ${changed.length} file(s)`,
-      'write',
+      targets.some(isProtectedPath) ? 'protected' : 'write',
     );
     if (decision !== 'allow') throw new Error('The user denied this multi-file edit.');
     const summary = [];

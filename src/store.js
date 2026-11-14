@@ -153,7 +153,10 @@ class SessionStore {
     const before = this.data.sessions.length;
     this.data.sessions = this.data.sessions.filter((session) => session.id !== id);
     if (this.data.activeId === id) {
-      this.data.activeId = this.data.sessions[0] ? this.data.sessions[0].id : null;
+      const remaining = this.data.sessions
+        .slice()
+        .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+      this.data.activeId = remaining[0] ? remaining[0].id : null;
     }
     if (this.data.sessions.length !== before) this.persist();
     return this.list();

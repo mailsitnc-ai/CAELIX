@@ -12,7 +12,7 @@ function quote(value) {
 
 async function run(context) {
   const {
-    app, win, startedAt, getWindowReadyMs, getFirstPaintMs, getLastError, checksDir, workspace,
+    app, win, engine, sessions, startedAt, getWindowReadyMs, getFirstPaintMs, getLastError, checksDir, workspace,
   } = context;
 
   await fsp.mkdir(checksDir, { recursive: true });
@@ -339,6 +339,63 @@ async function run(context) {
       const stopped = await runner.execute('task_stop', { id: started.meta.taskId });
       if (!String(stopped.output).includes('Stopped')) throw new Error('The task did not stop.');
       return 'task started, listed and stopped';
+    });
+
+    await step('memory saves and reaches the system prompt', async () => {
+      await click('#memory-btn');
+      await waitFor('!document.querySelector("#memory-screen").classList.contains("hidden")', 5000, 'memory screen');
+      await setValue('#memory-file', 'CAELIX.md');
+      await sleep(500);
+      await setValue('#memory-text', '# CAELIX check\n\n- Memory marker: caelix-memory-ok\n- When asked, reply with the marker.\n');
+      await click('#memory-save');
+      await waitFor('document.querySelector("#memory-status").textContent.includes("bytes loaded")', 6000, 'memory saved');
+      const text = await fsp.readFile(path.join(workspace, 'CAELIX.md'), 'utf8');
+      if (!text.includes('caelix-memory-ok')) throw new Error('The memory file was not written.');
+      const prompt = engine.systemPrompt({ cwd: workspace, mode: 'ask', messages: [] });
+      if (!prompt.includes('caelix-memory-ok')) throw new Error('The memory marker is missing from the system prompt.');
+      return 'CAELIX.md saved and present in the system prompt';
+    });
+    await snap('memory editor');
+    await click('#memory-close');
+
+    await step('context report counts the whole turn', async () => {
+      await click('[data-tab="context"]');
+      await waitFor('document.querySelector("#context-view") && !document.querySelector("#context-view").classList.contains("hidden")', 5000, 'context view');
+      const active = await evaluate('document.querySelector(".panel-tab.active")?.dataset.tab || null');
+      if (active !== 'context') throw new Error(`The Context tab did not activate (${active}).`);
+      await waitFor('document.querySelector("#context-report .context-number")', 5000, 'context report');
+      const report = await evaluate('window.__caelixState.contextReport');
+      if (!report || !(report.total > 0)) throw new Error('The context report is empty.');
+      if (!(report.messages > 0)) throw new Error('The context report counted no messages.');
+      return `${report.total} tokens across ${report.messages} messages`;
+    });
+    await sleep(250);
+    await snap('context report');
+
+    await step('protected paths refuse a bypass write', async () => {
+      const { ToolRunner } = require('./engine/tools');
+      const runner = new ToolRunner({ root: workspace, mode: 'bypass', ask: async () => 'deny' });
+      let refused = false;
+      try {
+        await runner.execute('write_file', { path: '.git/config', content: 'refused' });
+      } catch (error) {
+        refused = /denied|permission/i.test(error.message);
+      }
+      if (!refused) throw new Error('A bypass write to .git was not refused.');
+      return 'bypass write to .git asked first and was refused';
+    });
+
+    await step('delete a chat inline', async () => {
+      await click('#new-chat');
+      await waitFor('window.__caelixState.sessions.length > 1', 5000, 'second chat');
+      const before = await evaluate('document.querySelectorAll(".session-item").length');
+      await click('.session-item.active .session-delete');
+      await waitFor('document.querySelector(".session-item.active .session-delete.armed")', 3000, 'delete armed');
+      await click('.session-item.active .session-delete');
+      await sleep(800);
+      const after = await evaluate('document.querySelectorAll(".session-item").length');
+      if (after >= before) throw new Error('The chat was not deleted from the sidebar.');
+      return `chat deleted (${before} → ${after})`;
     });
 
     await step('collapse and restore the right panel', async () => {

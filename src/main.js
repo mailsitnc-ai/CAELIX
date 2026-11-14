@@ -360,6 +360,36 @@ function registerIpc() {
 
   ipcMain.handle('tasks:stop', (_event, id) => engine.tasks.stop(id));
 
+  ipcMain.handle('memory:list', (_event, { cwd } = {}) => {
+    const root = path.resolve(cwd || projectPath());
+    const entries = engine.memory(root);
+    const prompt = engine.systemPrompt({ cwd: root, mode: 'ask', messages: [] });
+    return {
+      cwd: root,
+      entries,
+      promptTokens: Math.max(1, Math.round(prompt.length / 4)),
+      promptChars: prompt.length,
+    };
+  });
+
+  ipcMain.handle('memory:save', (_event, { cwd, file, text } = {}) => {
+    const root = path.resolve(cwd || projectPath());
+    const allowed = new Set(['CAELIX.md', 'AGENTS.md', path.join('.caelix', 'CAELIX.md')]);
+    const name = String(file || 'CAELIX.md');
+    if (!allowed.has(name)) throw new Error('That memory file is not supported.');
+    const target = path.resolve(root, name);
+    if (target !== root && !target.startsWith(`${root}${path.sep}`)) throw new Error('The memory file must stay inside the project.');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, String(text ?? ''), 'utf8');
+    return { file: name, bytes: Buffer.byteLength(String(text ?? '')), entries: engine.memory(root) };
+  });
+
+  ipcMain.handle('context:get', (_event, { sessionId } = {}) => {
+    const session = sessions.get(sessionId);
+    if (!session) return null;
+    return engine.contextReport(session);
+  });
+
   ipcMain.handle('terminal:run', async (_event, { sessionId, command }) => engine.runTerminal(sessionId, command));
 
   ipcMain.handle('shell:open-external', (_event, url) => {

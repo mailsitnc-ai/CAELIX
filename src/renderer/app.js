@@ -33,13 +33,16 @@ const state = {
   sendStartedAt: null,
   keysOpen: false,
   initialized: false,
+  contextReport: null,
+  memory: null,
+  memoryOpen: false,
 };
 
 const MODES = [
-  { id: 'ask', title: 'Ask', sub: 'Every action needs approval' },
+  { id: 'ask', title: 'Manual', sub: 'Ask before every action' },
   { id: 'accept', title: 'Accept edits', sub: 'In-project edits proceed automatically' },
   { id: 'plan', title: 'Plan', sub: 'Read-only research and a written plan' },
-  { id: 'bypass', title: 'Bypass', sub: 'In-project actions run without asking' },
+  { id: 'bypass', title: 'Bypass permissions', sub: 'In-project actions run without asking' },
 ];
 
 const TOOL_LABELS = {
@@ -202,11 +205,43 @@ function renderSessions() {
     group.textContent = label;
     list.appendChild(group);
     for (const session of sessions) {
-      const button = document.createElement('button');
+      const button = document.createElement('div');
       button.className = `session-item${session.id === state.activeId ? ' active' : ''}`;
       button.dataset.session = session.id;
-      button.innerHTML = `<span class="session-title">${escapeHtml(session.title)}</span><span class="session-meta">${escapeHtml(displayProject(session.cwd))} · ${escapeHtml(session.model || '')}</span>`;
-      button.addEventListener('click', () => openSession(session.id));
+      button.tabIndex = 0;
+      button.setAttribute('role', 'button');
+      button.innerHTML = `<span class="session-title">${escapeHtml(session.title)}</span><span class="session-meta">${escapeHtml(displayProject(session.cwd))} · ${escapeHtml(session.model || '')}</span><button class="session-delete" title="Delete chat" aria-label="Delete chat">×</button>`;
+      button.addEventListener('click', (event) => {
+        if (event.target.closest('.session-delete')) return;
+        openSession(session.id);
+      });
+      button.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') openSession(session.id);
+      });
+      let armed = false;
+      let disarmTimer = null;
+      const deleteButton = button.querySelector('.session-delete');
+      deleteButton.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        if (!armed) {
+          armed = true;
+          deleteButton.classList.add('armed');
+          deleteButton.textContent = 'Delete?';
+          disarmTimer = setTimeout(() => {
+            armed = false;
+            deleteButton.classList.remove('armed');
+            deleteButton.textContent = '×';
+          }, 2500);
+          return;
+        }
+        clearTimeout(disarmTimer);
+        await api.invoke('sessions:delete', session.id);
+        await refreshSessions();
+        if (state.activeId) await openSession(state.activeId);
+        else await newChat();
+        renderAll();
+        toast('Chat deleted.');
+      });
       list.appendChild(button);
     }
   }
@@ -357,6 +392,38 @@ function renderChanges() {
   }
 }
 
+function renderContext() {
+  const node = $('#context-report');
+  if (!node) return;
+  const report = state.contextReport;
+  if (!report) {
+    node.innerHTML = '<div class="panel-empty">Context usage appears after the first reply</div>';
+    return;
+  }
+  const rows = [
+    ['System and memory', report.systemTokens],
+    ['Messages', report.messageTokens],
+    ['Tool results', report.toolTokens],
+  ];
+  const max = Math.max(1, report.total);
+  node.innerHTML = `
+    <div class="context-total">
+      <span class="context-number">${report.total.toLocaleString()}</span>
+      <span class="context-unit">of ${report.limit.toLocaleString()} tokens</span>
+      <span class="context-percent">${report.percent}%</span>
+    </div>
+    <div class="context-bar"><span style="width:${Math.max(1, Math.min(100, report.percent))}%"></span></div>
+    <div class="context-rows">
+      ${rows.map(([label, value]) => `
+        <div class="context-row">
+          <span class="context-label">${label}</span>
+          <span class="context-track"><i style="width:${Math.max(1, Math.round((value / max) * 100))}%"></i></span>
+          <span class="context-value">${value.toLocaleString()}</span>
+        </div>`).join('')}
+    </div>
+    <div class="context-foot">${report.messages} saved message(s) in this chat.</div>`;
+}
+
 function renderTerminal() {
   const node = $('#terminal');
   const rows = [];
@@ -456,6 +523,7 @@ function renderAll() {
   renderTranscript();
   renderChanges();
   renderTerminal();
+  renderContext();
   renderSessions();
 }
 
@@ -467,6 +535,11 @@ async function openSession(id) {
   state.changes = (session.changes || []).filter((change) => change.file);
   state.terminal = session.terminal || [];
   state.project = session.cwd;
+  try {
+    state.contextReport = await api.invoke('context:get', { sessionId: id });
+  } catch {
+    state.contextReport = null;
+  }
   await api.invoke('sessions:set-active', id);
   renderAll();
   scrollToBottom(true);
@@ -483,6 +556,7 @@ async function newChat() {
   state.activeId = session.id;
   state.changes = [];
   state.terminal = [];
+  state.contextReport = null;
   await refreshSessions();
   renderAll();
   $('#prompt').focus();
@@ -537,17 +611,21 @@ function appendPermission(request) {
   const target = request.target || request.detail || '';
   card.innerHTML = `
     <div class="permission-title"><span>◆</span>${escapeHtml(request.action || 'Permission needed')}</div>
-    <div class="permission-detail">CAELIX wants to run <code>${escapeHtml(request.tool)}</code> on <code>${escapeHtml(target)}</code>.</div>
+    <div class="permission-detail">CAELIX wants to use <code>${escapeHtml(request.tool)}</code> on <code>${escapeHtml(target)}</code>.</div>
     <div class="permission-actions">
-      <button class="primary" data-decision="allow" id="permission-allow">Allow once</button>
-      <button data-decision="session" id="permission-session">Allow for session</button>
-      <button data-decision="deny" id="permission-deny">Deny</button>
+      <button class="primary" data-decision="session" id="permission-session">Always allow</button>
+      <button data-decision="allow" id="permission-allow">Allow once</button>
+      <button data-decision="deny" id="permission-deny">Cancel</button>
     </div>`;
   for (const button of $$('button', card)) {
     button.addEventListener('click', async () => {
       const decision = button.dataset.decision;
       for (const other of $$('button', card)) other.disabled = true;
-      card.querySelector('.permission-detail').textContent = decision === 'deny' ? 'Denied. The model receives the refusal.' : 'Approved. Running the action…';
+      card.querySelector('.permission-detail').textContent = decision === 'deny'
+        ? 'Cancelled. The model receives the refusal.'
+        : decision === 'session'
+          ? 'Allowed for this session. The same action will not ask again.'
+          : 'Allowed once. Running the action…';
       await api.invoke('permission:respond', { id: request.id, decision });
     });
   }
@@ -667,8 +745,18 @@ function onChatEvent(event) {
       break;
     case 'todos':
       break;
+    case 'context':
+      state.contextReport = event.report;
+      renderContext();
+      if (event.compacted) toast(`Compacted ${event.compacted} older message(s) to fit the context window.`);
+      break;
     case 'done':
       setStreaming(false);
+      if (event.context) {
+        state.contextReport = event.context;
+        renderContext();
+      }
+      if (event.compacted) toast(`Compacted ${event.compacted} older message(s) to fit the context window.`);
       if (state.currentAssistant) {
         if (!state.liveText) state.currentAssistant.md.innerHTML = '';
         const status = $('#stream-status');
@@ -742,6 +830,67 @@ function closeKeys() {
   $('#keys-screen').classList.add('hidden');
 }
 
+async function refreshMemory() {
+  const data = await api.invoke('memory:list', { cwd: state.project });
+  state.memory = data;
+  const badge = $('#memory-count');
+  if (badge) badge.textContent = data.entries.length ? String(data.entries.length) : '';
+  return data;
+}
+
+function renderMemoryFiles(data) {
+  const node = $('#memory-files');
+  if (!data.entries.length) {
+    node.innerHTML = '<span class="memory-none">No project instructions yet.</span>';
+    return;
+  }
+  node.innerHTML = data.entries.map((entry) => `<button class="memory-chip" data-memory-file="${escapeHtml(entry.file)}">${escapeHtml(entry.file)} · ${entry.bytes.toLocaleString()} B</button>`).join('');
+  for (const chip of $$('.memory-chip', node)) {
+    chip.addEventListener('click', async () => {
+      const select = $('#memory-file');
+      if ([...select.options].some((option) => option.value === chip.dataset.memoryFile)) select.value = chip.dataset.memoryFile;
+      await loadMemoryEditor();
+    });
+  }
+}
+
+async function loadMemoryEditor() {
+  const data = await refreshMemory();
+  const file = $('#memory-file').value || 'CAELIX.md';
+  const entry = data.entries.find((item) => item.file === file);
+  $('#memory-text').value = entry ? entry.text : '';
+  $('#memory-status').textContent = entry ? `${entry.bytes.toLocaleString()} bytes loaded into every reply` : 'Not created yet';
+  $('#memory-prompt-info').textContent = `${data.promptTokens.toLocaleString()} prompt tokens with memory`;
+  renderMemoryFiles(data);
+}
+
+async function openMemory() {
+  state.memoryOpen = true;
+  $('#memory-screen').classList.remove('hidden');
+  try {
+    await loadMemoryEditor();
+  } catch (error) {
+    $('#memory-status').textContent = error.message;
+  }
+}
+
+function closeMemory() {
+  state.memoryOpen = false;
+  $('#memory-screen').classList.add('hidden');
+}
+
+async function saveMemory() {
+  const file = $('#memory-file').value;
+  const text = $('#memory-text').value;
+  try {
+    await api.invoke('memory:save', { cwd: state.project, file, text });
+    await loadMemoryEditor();
+    toast(`${file} saved. New replies include it.`);
+  } catch (error) {
+    $('#memory-status').textContent = error.message;
+  }
+}
+
 function renderModelMenu(filter = '') {
   const menu = $('#model-menu');
   const query = filter.trim().toLowerCase();
@@ -804,6 +953,11 @@ function bind() {
   $('#keys-btn').addEventListener('click', openKeys);
   $('#keys-close').addEventListener('click', closeKeys);
   $('#keys-screen').addEventListener('click', (event) => { if (event.target.id === 'keys-screen') closeKeys(); });
+  $('#memory-btn').addEventListener('click', openMemory);
+  $('#memory-close').addEventListener('click', closeMemory);
+  $('#memory-save').addEventListener('click', saveMemory);
+  $('#memory-file').addEventListener('change', () => { loadMemoryEditor().catch(() => {}); });
+  $('#memory-screen').addEventListener('click', (event) => { if (event.target.id === 'memory-screen') closeMemory(); });
 
   $('#model-chip').addEventListener('click', (event) => {
     event.stopPropagation();
@@ -895,7 +1049,9 @@ function bind() {
       const target = tab.dataset.tab;
       $('#changes-view').classList.toggle('hidden', target !== 'changes');
       $('#terminal-view').classList.toggle('hidden', target !== 'terminal');
+      $('#context-view').classList.toggle('hidden', target !== 'context');
       if (target === 'terminal') renderTerminal();
+      if (target === 'context') renderContext();
     });
   }
 
@@ -983,6 +1139,11 @@ async function init() {
       state.project = session.cwd || state.project;
       state.changes = (session.changes || []).filter((change) => change.file);
       state.terminal = session.terminal || [];
+      try {
+        state.contextReport = await api.invoke('context:get', { sessionId: session.id });
+      } catch {
+        state.contextReport = null;
+      }
     }
   }
   if (!state.session) {
@@ -992,6 +1153,7 @@ async function init() {
   }
 
   bind();
+  try { await refreshMemory(); } catch { state.memory = null; }
   renderAll();
   resizePrompt();
   reportFirstPaint();

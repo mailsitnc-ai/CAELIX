@@ -1,5 +1,15 @@
 # CAELIX changelog
 
+## 0.1.3 — memory, context and safer permissions
+
+- Mode labels now match the reference: Manual, Accept edits, Plan, Bypass permissions; permission cards offer Always allow, Allow once and Cancel.
+- Added a Project memory editor for `CAELIX.md`, `AGENTS.md` and `.caelix/CAELIX.md`, with recursive `@import` lines, a 12 KB budget and the prompt-token count. Saved memory enters every reply.
+- Added the Context tab with total, system/memory, message and tool-result tokens, a usage bar and a saved-message count.
+- Long histories are trimmed to fit the context window; the reply reports how many messages were compacted and the window shows a notice.
+- `.git`, `.claude` and `.caelix` are protected: a write there asks for permission even in Bypass permissions mode.
+- Chats delete inline with a two-click confirmation; deleting the active chat opens the most recently updated one.
+- The self-check grew to 17 steps and 10 screenshots, covering memory save and prompt inclusion, the context report, a refused protected write and chat deletion.
+
 ## 0.1.2 — headless CLI and the full local tool set
 
 - Added `caelix run "<prompt>"` with `--cwd`, `--provider`, `--model`, `--mode`, `--yes` and `--json`; it uses the same engine, tools and event stream as the window.
