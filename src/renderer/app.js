@@ -1102,9 +1102,10 @@ function onChatEvent(event) {
       const card = document.createElement('div');
       card.className = 'helper-card';
       card.id = `helper-${event.id}`;
+      const agentTitle = event.agentName ? `Agent · ${event.agentName}` : 'Helper Agent';
       card.innerHTML = `
-        <div class="helper-head"><span>Helper Agent</span><span>${escapeHtml(String(event.task || '').slice(0, 120))}</span></div>
-        <div class="helper-steps">Running read-only investigation…</div>`;
+        <div class="helper-head"><span>${escapeHtml(agentTitle)}</span><span>${escapeHtml(String(event.task || '').slice(0, 120))}</span></div>
+        <div class="helper-steps">Running investigation…</div>`;
       state.currentAssistant.body.appendChild(card);
       scrollToBottom();
       break;
@@ -1126,8 +1127,8 @@ function onChatEvent(event) {
       const card = document.getElementById(`helper-${event.id}`);
       if (!card) break;
       const steps = card.querySelector('.helper-steps');
-      if (steps && steps.textContent === 'Running read-only investigation…') {
-        steps.textContent = 'Completed read-only investigation';
+      if (steps && (steps.textContent === 'Running read-only investigation…' || steps.textContent === 'Running investigation…')) {
+        steps.textContent = 'Completed investigation';
       }
       const md = document.createElement('div');
       md.className = 'md';
@@ -1518,9 +1519,10 @@ function renderMcpRows(servers = []) {
   for (const s of servers) {
     const row = document.createElement('div');
     row.className = 'config-item';
+    row.dataset.name = s.name;
     const badgeClass = s.connected ? 'ok' : s.error ? 'err' : '';
     const badgeText = s.connected ? `${s.tools.length} tool(s)` : s.enabled ? (s.error ? 'Error' : 'Disconnected') : 'Disabled';
-    const target = s.url || [s.command, ...(s.args || [])].join(' ');
+    const target = s.description || s.url || [s.command, ...(s.args || [])].join(' ');
     row.innerHTML = `
       <div class="config-item-head">
         <strong>${escapeHtml(s.name)}</strong>
@@ -1572,6 +1574,8 @@ function renderHookRows(items = []) {
   for (const h of items) {
     const row = document.createElement('div');
     row.className = 'config-item';
+    row.dataset.id = h.id;
+    row.dataset.command = h.command;
     row.innerHTML = `
       <div class="config-item-head">
         <strong>${escapeHtml(h.event)}</strong>
@@ -1613,9 +1617,41 @@ function closeHooks() {
   $('#hooks-screen').classList.add('hidden');
 }
 
-function openHelper() {
+function renderAgentsList(items = []) {
+  const wrap = $('#agent-list');
+  if (!wrap) return;
+  if (!state.selectedAgent || !items.some((a) => a.id === state.selectedAgent)) {
+    state.selectedAgent = items[0]?.id || 'explore';
+  }
+  wrap.innerHTML = '';
+  for (const agent of items) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = `agent-card${state.selectedAgent === agent.id ? ' active' : ''}`;
+    card.dataset.agentId = agent.id;
+    card.innerHTML = `
+      <div class="agent-card-head">
+        <strong>${escapeHtml(agent.name)}</strong>
+        <span class="config-badge">${escapeHtml(agent.scope)}</span>
+      </div>
+      <div class="agent-card-desc">${escapeHtml(agent.description || '')}</div>`;
+    card.addEventListener('click', () => {
+      state.selectedAgent = agent.id;
+      renderAgentsList(items);
+      $('#helper-task')?.focus();
+    });
+    wrap.appendChild(card);
+  }
+}
+
+async function openHelper() {
   state.helperOpen = true;
   $('#helper-screen').classList.remove('hidden');
+  try {
+    const list = await api.invoke('agents:list', { cwd: state.project });
+    state.agents = list;
+    renderAgentsList(list);
+  } catch { /* fallback empty */ }
   $('#helper-task')?.focus();
 }
 
@@ -1922,17 +1958,82 @@ function bind() {
   for (const preset of $$('.helper-preset')) {
     preset.addEventListener('click', async () => {
       const task = preset.dataset.helperTask;
+      const agent = preset.dataset.helperAgent || state.selectedAgent || 'explore';
       closeHelper();
-      await api.invoke('chat:helper', { sessionId: state.session.id, task });
+      await api.invoke('chat:helper', { sessionId: state.session.id, task, agent });
     });
   }
   $('#helper-run')?.addEventListener('click', async () => {
     const task = $('#helper-task').value.trim();
-    if (!task) { toast('Enter a task for the Helper Agent.'); return; }
+    if (!task) { toast('Enter a task for the selected agent.'); return; }
+    const agent = state.selectedAgent || 'explore';
     closeHelper();
     $('#helper-task').value = '';
-    await api.invoke('chat:helper', { sessionId: state.session.id, task });
+    await api.invoke('chat:helper', { sessionId: state.session.id, task, agent });
   });
+  $('#agent-new-toggle')?.addEventListener('click', () => {
+    $('#agent-custom-form')?.classList.toggle('hidden');
+  });
+  $('#agent-save')?.addEventListener('click', async () => {
+    const name = $('#agent-name')?.value.trim();
+    const description = $('#agent-desc')?.value.trim();
+    const prompt = $('#agent-prompt')?.value.trim();
+    const scope = $('#agent-scope')?.value || 'project';
+    if (!name || !prompt) { toast('Enter an agent name and instructions.'); return; }
+    try {
+      const list = await api.invoke('agents:save', { name, description, prompt, scope, cwd: state.project });
+      state.agents = list;
+      state.selectedAgent = list.find((a) => a.name === name)?.id || state.selectedAgent;
+      $('#agent-name').value = '';
+      $('#agent-desc').value = '';
+      $('#agent-prompt').value = '';
+      $('#agent-custom-form')?.classList.add('hidden');
+      renderAgentsList(list);
+      toast(`Saved agent "${name}".`);
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  for (const btn of $$('#mcp-presets .preset-chip[data-mcp-preset]')) {
+    btn.addEventListener('click', () => {
+      const p = btn.dataset.mcpPreset;
+      const map = {
+        filesystem: { name: 'filesystem', cmd: `npx -y @modelcontextprotocol/server-filesystem ${state.project || '.'}` },
+        fetch: { name: 'fetch', cmd: 'uvx mcp-server-fetch' },
+        git: { name: 'git', cmd: `uvx mcp-server-git --repository ${state.project || '.'}` },
+      };
+      if (map[p]) {
+        $('#mcp-name').value = map[p].name;
+        $('#mcp-command').value = map[p].cmd;
+        $('#mcp-command').focus();
+      }
+    });
+  }
+  $('#mcp-import-claude')?.addEventListener('click', async () => {
+    try {
+      const res = await api.invoke('mcp:import-claude', { cwd: state.project });
+      renderMcpRows(res.servers || []);
+      toast(res.imported ? `Imported ${res.imported} MCP server(s) from Claude.` : 'No new Claude MCP servers found to import.');
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+  for (const btn of $$('#hooks-presets .preset-chip[data-hook-preset]')) {
+    btn.addEventListener('click', () => {
+      const p = btn.dataset.hookPreset;
+      const map = {
+        notify: { event: 'Stop', matcher: '*', cmd: 'osascript -e \'display notification "Turn finished" with title "CAELIX"\'' },
+        'git-block': { event: 'PreToolUse', matcher: '^bash$', cmd: '/usr/bin/python3 -c \'import json,re,sys; d=json.load(sys.stdin); c=(d.get("input") or {}).get("command",""); re.search(r"git\\s+push\\s+.*--force",c) and (sys.stderr.write("Blocked force push\\n"), sys.exit(2))\'' },
+        audit: { event: 'PostToolUse', matcher: '*', cmd: '/usr/bin/python3 -c \'import json,sys; d=json.load(sys.stdin); print("Logged", d.get("tool"))\'' },
+      };
+      if (map[p]) {
+        $('#hook-event').value = map[p].event;
+        $('#hook-matcher').value = map[p].matcher;
+        $('#hook-command').value = map[p].cmd;
+        $('#hook-command').focus();
+      }
+    });
+  }
 
   $('#slash-btn')?.addEventListener('click', () => {
     const prompt = $('#prompt');

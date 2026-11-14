@@ -1211,3 +1211,42 @@ html[data-theme="light"] .helper-card {
   color: var(--muted);
   vertical-align: middle;
 }
+.quick-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 10px;
+}
+.preset-chip {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.preset-chip:hover { border-color: var(--accent); color: var(--text); }
+.agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));
+  gap: 8px;
+  margin: 10px 0 12px;
+  max-height: 180px;
+  overflow: auto;
+}
+.agent-card {
+  text-align: left;
+  padding: 9px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--text);
+  cursor: pointer;
+}
+.agent-card:hover { border-color: var(--accent); }
+.agent-card.active { border-color: var(--accent); background: var(--accent-soft); }
+.agent-card-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 12.5px; margin-bottom: 4px; }
+.agent-card-desc { font-size: 11px; color: var(--muted); line-height: 1.35; }
+.agent-custom-wrap { margin-top: 10px; }

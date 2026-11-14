@@ -2,6 +2,9 @@
 
 ## 0.1.9 (Groq & timeout/reasoning updates)
 
+- Preconfigured built-in local **MCP servers** (`desktop`: `mac_system_info`, `git_overview`, `listening_ports`, `clipboard_read`; `memory`: persistent `memory_save`, `memory_search`, `memory_delete` via `src/engine/mcp-builtin.js`), Homebrew `PATH` discovery, one-click presets, and Claude MCP import.
+- Preconfigured default **Lifecycle Hooks** (destructive `bash` command guard, `.env`/key file edit guard, and post-edit JS/JSON syntax check) plus quick-add hook presets in the UI.
+- Added **`AgentRegistry`** (`src/engine/agents.js`) with 5 built-in specialized agents (`explore`, `plan`, `review`, `verify`, `general`), `.caelix/agents/*.md` and `.claude/agents/*.md` custom agent support, and an upgraded **Agents** modal to pick or create reusable agents.
 - Added **Groq** (`groq`) provider support (`https://api.groq.com/openai/v1/chat/completions`, curated models `llama-3.3-70b-versatile`, `openai/gpt-oss-120b`, `openai/gpt-oss-20b`, `qwen/qwen3.8-27b`, `llama-3.1-8b-instant`, `groq/compound`, live `/openai/v1/models` refresh excluding audio/TTS/guard models, `GROQ_API_KEY` CLI support, and Keys modal slot).
 - Added live `Waiting` / `Queued` / `Thinking` status feedback when reasoning models stream `delta.reasoning_content` / `delta.reasoning` or SSE keepalive comments before visible answer text starts.
 - Added a `35s` first-byte / idle-stall request timeout (`CAELIX_REQUEST_TIMEOUT_MS`) on `streamOpenAICompatible` (`err.noRetry = true`) and a `15s` timeout + active-model check on `keys:test`, plus `Open Keys` / `Switch Model` recovery actions on `404` and `408` errors.

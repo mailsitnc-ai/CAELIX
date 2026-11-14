@@ -524,15 +524,16 @@ async function run(context) {
       await click('#send-btn');
       await waitFor('document.querySelector("#transcript").textContent.includes("Compacted context")', 4000, '/compact result card');
 
-      // Helper Agent modal -> run read-only helper task
+      // Agents & Helper modal -> check built-in agents and run task
       await click('#helper-btn');
-      await waitFor('window.__caelixState.helperOpen === true', 3000, 'helper modal');
+      await waitFor('window.__caelixState.helperOpen === true', 3000, 'agents modal');
+      await waitFor('document.querySelectorAll("#agent-list .agent-card").length >= 5', 4000, '5 built-in specialized agents');
       await setValue('#helper-task', 'Inspect workspace files');
       await click('#helper-run');
       await waitFor('document.querySelectorAll(".helper-card").length >= 1', 6000, 'helper agent card rendered');
       await waitFor('window.__caelixState.streaming === false', 8000, 'helper turn complete');
 
-      // MCP Server modal: add tiny stdio script, verify connected tool, then remove
+      // MCP Server modal: verify built-in desktop & memory servers are connected, add tiny stdio script, verify connected tool, then remove
       const mockMcp = path.join(workspace, 'mock-mcp.sh');
       fs.writeFileSync(mockMcp, [
         '#!/bin/sh',
@@ -546,22 +547,24 @@ async function run(context) {
       ].join('\n'), { mode: 0o755 });
       await click('#mcp-btn');
       await waitFor('window.__caelixState.mcpOpen === true', 3000, 'mcp modal');
+      await waitFor('document.querySelector("#mcp-list").textContent.includes("4 tool(s)") && document.querySelector("#mcp-list").textContent.includes("3 tool(s)")', 10000, 'built-in desktop & memory MCP servers connected');
       await setValue('#mcp-name', 'mockping');
       await setValue('#mcp-command', mockMcp);
       await click('#mcp-add');
       await waitFor('document.querySelector("#mcp-list").textContent.includes("1 tool(s)")', 8000, 'mcp connected with 1 tool');
-      await click('#mcp-list .mcp-remove');
+      await click('#mcp-list [data-name="mockping"] .mcp-remove');
       await waitFor('!document.querySelector("#mcp-list").textContent.includes("mockping")', 4000, 'mcp removed');
       await click('#mcp-close');
       fs.rmSync(mockMcp, { force: true });
 
-      // Hooks modal: add, toggle, remove
+      // Hooks modal: verify default hooks present, then add, verify, remove
       await click('#hooks-btn');
       await waitFor('window.__caelixState.hooksOpen === true', 3000, 'hooks modal');
+      await waitFor('document.querySelectorAll("#hooks-list .config-item").length >= 3', 4000, 'default safety & syntax hooks present');
       await setValue('#hook-command', 'echo hook-ok');
       await click('#hook-add');
       await waitFor('document.querySelector("#hooks-list").textContent.includes("echo hook-ok")', 4000, 'hook saved');
-      await click('#hooks-list .hook-remove');
+      await click('#hooks-list [data-command="echo hook-ok"] .hook-remove');
       await waitFor('!document.querySelector("#hooks-list").textContent.includes("echo hook-ok")', 4000, 'hook removed');
       await click('#hooks-close');
       await snap('mcp hooks helper commands');

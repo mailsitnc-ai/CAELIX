@@ -102,8 +102,8 @@
                 <button id="attach-btn" class="icon-btn" title="Attach a file or image" aria-label="Attach a file or image">
                   <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M9.8 4.6 5.2 9.2a2.2 2.2 0 0 0 3.1 3.1l4.6-4.6a3.6 3.6 0 0 0-5.1-5.1L3.5 6.9a5 5 0 0 0 7.1 7.1l2.2-2.2" stroke="currentColor" stroke-linecap="round"/></svg>
                 </button>
-                <button id="slash-btn" class="mini-chip" title="Slash commands (/compact, /btw, /mcp, /hooks, /helper)">/ Commands</button>
-                <button id="helper-btn" class="mini-chip" title="Run read-only Helper Agent (/helper)">Helper</button>
+                <button id="slash-btn" class="mini-chip" title="Slash commands (/compact, /btw, /mcp, /hooks, /agent)">/ Commands</button>
+                <button id="helper-btn" class="mini-chip" title="Specialized Agents & Helper (/agent, /helper)">Agents</button>
                 <button id="composer-mode" class="mini-chip">Manual</button>
                 <button id="composer-model" class="mini-chip model">gemini-2.5-flash</button>
               </div>
@@ -223,6 +223,12 @@
         </div>
       </div>
       <div id="mcp-list" class="config-list"></div>
+      <div class="quick-presets" id="mcp-presets">
+        <button type="button" class="preset-chip" data-mcp-preset="filesystem">+ Filesystem MCP</button>
+        <button type="button" class="preset-chip" data-mcp-preset="fetch">+ Fetch MCP</button>
+        <button type="button" class="preset-chip" data-mcp-preset="git">+ Git MCP</button>
+        <button type="button" class="preset-chip" id="mcp-import-claude">Import from Claude</button>
+      </div>
       <div class="config-form">
         <div class="config-row">
           <input id="mcp-name" placeholder="Server name (e.g. filesystem)" aria-label="MCP server name">
@@ -254,6 +260,11 @@
         </div>
       </div>
       <div id="hooks-list" class="config-list"></div>
+      <div class="quick-presets" id="hooks-presets">
+        <button type="button" class="preset-chip" data-hook-preset="notify">+ Turn Finished Bell</button>
+        <button type="button" class="preset-chip" data-hook-preset="git-block">+ Block Force Push</button>
+        <button type="button" class="preset-chip" data-hook-preset="audit">+ Log Tool Calls</button>
+      </div>
       <div class="config-form">
         <div class="config-row">
           <select id="hook-event" aria-label="Hook event">
@@ -280,24 +291,42 @@
   </div>
 
   <div id="helper-screen" class="overlay hidden">
-    <div class="keys-card">
-      <button id="helper-close" class="icon-btn keys-close" aria-label="Close Helper Agent">×</button>
+    <div class="keys-card modal-wide">
+      <button id="helper-close" class="icon-btn keys-close" aria-label="Close Agents">×</button>
       <div class="keys-head">
         <img src="../../assets/icon-1024.png" alt="">
         <div>
-          <h1>Helper Agent</h1>
-          <p>Run a read-only subagent in a separate context to explore files, check tests, or find bugs without cluttering this chat.</p>
+          <h1>Agents &amp; Subagents</h1>
+          <p>Choose a specialized agent or create your own reusable agent instructions (stored in <code>.caelix/agents/</code>).</p>
         </div>
       </div>
+      <div id="agent-list" class="agent-grid"></div>
       <div class="helper-presets">
-        <button type="button" class="empty-card helper-preset" data-helper-task="Explore the project layout and summarize the main modules."><b>Explore codebase</b>Map files and entrypoints.</button>
-        <button type="button" class="empty-card helper-preset" data-helper-task="Inspect recent files for edge cases, bugs, or error-handling gaps."><b>Find bugs</b>Scan for potential issues.</button>
-        <button type="button" class="empty-card helper-preset" data-helper-task="Find all tests, scripts, and checks and summarize how to run them."><b>Check tests</b>Locate tests and verify commands.</button>
+        <button type="button" class="empty-card helper-preset" data-helper-agent="explore" data-helper-task="Explore the project layout and summarize the main modules."><b>Explore codebase</b>Map files and entrypoints.</button>
+        <button type="button" class="empty-card helper-preset" data-helper-agent="review" data-helper-task="Inspect recent files for edge cases, bugs, or error-handling gaps."><b>Code review</b>Scan for potential issues.</button>
+        <button type="button" class="empty-card helper-preset" data-helper-agent="verify" data-helper-task="Find all tests, scripts, and checks, run them, and summarize the results."><b>Run checks</b>Verify tests and builds.</button>
       </div>
       <div class="config-form">
         <div class="config-row">
-          <input id="helper-task" placeholder="Or enter a custom read-only research task for the Helper Agent…" aria-label="Helper Agent task">
-          <button id="helper-run" class="primary" type="button">Run Helper</button>
+          <input id="helper-task" placeholder="Describe a task for the selected agent…" aria-label="Agent task">
+          <button id="helper-run" class="primary" type="button">Run Agent</button>
+        </div>
+      </div>
+      <div class="agent-custom-wrap">
+        <button id="agent-new-toggle" type="button" class="preset-chip">+ Create custom agent</button>
+        <div id="agent-custom-form" class="config-form hidden">
+          <div class="config-row">
+            <input id="agent-name" placeholder="Agent name (e.g. security-auditor)" aria-label="Custom agent name">
+            <input id="agent-desc" placeholder="Short description" aria-label="Custom agent description">
+            <select id="agent-scope" aria-label="Agent scope">
+              <option value="project">Project (.caelix/agents)</option>
+              <option value="user">User (global)</option>
+            </select>
+          </div>
+          <div class="config-row">
+            <input id="agent-prompt" placeholder="Instructions (e.g. Audit auth, permissions, and input handling strictly.)" aria-label="Custom agent instructions">
+            <button id="agent-save" class="primary" type="button">Save Agent</button>
+          </div>
         </div>
       </div>
     </div>

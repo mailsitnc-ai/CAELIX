@@ -40,9 +40,9 @@ Markers:
 - [x] `task_start` / `task_output` / `task_stop` — Background process lifecycle verified in `npm run selfcheck` ("background task starts, lists and stops").
 - [x] `skill` — Local skill discovery (`SKILLS.md` / `.agents/skills/*/SKILL.md` / `CAELIX.md`) verified in `npm run selfcheck`.
 - [x] `present_plan` & `ask_user` — Plan card and interactive/headless question cards verified in `npm run selfcheck` and `node src/cli.js run`.
-- [x] `subagent` & Helper Agent — Read-only `subagent` tool, live step/summary card (`Helper Agent`), UI launcher modal (`Helper`), and `/helper` command verified in `npm run selfcheck`.
-- [x] **MCP servers (`src/engine/mcp.js`)** — Stdio and HTTP MCP client support (`.mcp.json` & user `mcp.json`), dynamic `mcp__<server>__<tool>` registration/execution, and UI management modal verified in `node checks/verify_features.js` and `npm run selfcheck`.
-- [x] **Hooks (`src/engine/hooks.js`)** — `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop` shell hooks (`.caelix/hooks.json` & user `hooks.json`) with JSON stdin and exit-code `2` blocking + UI modal verified in `node checks/verify_features.js` and `npm run selfcheck`.
+- [x] `subagent` & Agents (`src/engine/agents.js`) — 5 built-in specialized agents (`explore`, `plan`, `review`, `verify`, `general`), custom `.caelix/agents/*.md` & `.claude/agents/*.md` discovery/creation, live step/summary card, and upgraded Agents modal verified in `node checks/verify_features.js` and `npm run selfcheck`.
+- [x] **MCP servers (`src/engine/mcp.js`, `src/engine/mcp-builtin.js`)** — Preconfigured local `desktop` (`mac_system_info`, `git_overview`, `listening_ports`, `clipboard_read`) and persistent `memory` (`memory_save`, `memory_search`, `memory_delete`) stdio MCP servers, HTTP MCP client support, Homebrew `PATH` support, one-click presets & Claude MCP import verified in `node checks/verify_features.js` and `npm run selfcheck`.
+- [x] **Hooks (`src/engine/hooks.js`)** — Preconfigured safety & syntax hooks (`shell-guard`, `secret-guard`, `syntax-check`), `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop` shell hooks with JSON stdin, exit-code `2` blocking, and UI preset chips verified in `node checks/verify_features.js` and `npm run selfcheck`.
 
 ---
 

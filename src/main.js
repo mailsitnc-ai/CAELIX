@@ -12,6 +12,7 @@ const { KeyStore, SessionStore, SettingsStore } = require('./store');
 const { Engine } = require('./engine');
 const { McpManager } = require('./engine/mcp');
 const { HooksManager } = require('./engine/hooks');
+const { AgentRegistry } = require('./engine/agents');
 const { providerList, testKey, fetchProviderModels, PROVIDERS } = require('./engine/providers');
 
 const PROCESS_STARTED = Date.now();
@@ -27,10 +28,12 @@ if (SELF_CHECK) {
   const isolated = path.join(app.getPath('appData'), 'CAELIX Selfcheck');
   app.setPath('userData', isolated);
   fs.mkdirSync(isolated, { recursive: true });
-  for (const file of ['sessions.json', 'keys.enc']) {
+  for (const file of ['sessions.json', 'keys.enc', 'mcp.json', 'hooks.json']) {
     try { fs.rmSync(path.join(isolated, file), { force: true }); } catch { /* fresh run */ }
   }
-  try { fs.rmSync(path.join(isolated, 'checkpoints'), { recursive: true, force: true }); } catch { /* fresh run */ }
+  for (const dir of ['checkpoints', 'agents']) {
+    try { fs.rmSync(path.join(isolated, dir), { recursive: true, force: true }); } catch { /* fresh run */ }
+  }
 }
 
 let win = null;
@@ -39,6 +42,7 @@ let sessions = null;
 let settings = null;
 let mcp = null;
 let hooks = null;
+let agents = null;
 let engine = null;
 let windowReadyMs = null;
 let firstPaintMs = null;
@@ -498,7 +502,7 @@ function registerIpc() {
 
   ipcMain.handle('chat:btw', async (_event, { sessionId, question } = {}) => engine.askBtw(sessionId, question));
 
-  ipcMain.handle('chat:helper', async (_event, { sessionId, task } = {}) => engine.runHelper(sessionId, task));
+  ipcMain.handle('chat:helper', async (_event, { sessionId, task, agent } = {}) => engine.runHelper(sessionId, task, agent));
 
   ipcMain.handle('chat:export', async (_event, { sessionId } = {}) => {
     const session = sessions.get(sessionId);
@@ -535,6 +539,18 @@ function registerIpc() {
     mcp.removeServer({ ...payload, cwd: payload.cwd || projectPath() });
     return mcp.status(payload.cwd || projectPath());
   });
+
+  ipcMain.handle('mcp:import-claude', async (_event, { cwd } = {}) => {
+    const imported = mcp.importClaudeServers();
+    const servers = await mcp.status(cwd || projectPath());
+    return { imported, servers };
+  });
+
+  ipcMain.handle('agents:list', (_event, { cwd } = {}) => agents.list(cwd || projectPath()));
+
+  ipcMain.handle('agents:save', (_event, payload = {}) => agents.saveAgent({ ...payload, cwd: payload.cwd || projectPath() }));
+
+  ipcMain.handle('agents:remove', (_event, payload = {}) => agents.removeAgent({ ...payload, cwd: payload.cwd || projectPath() }));
 
   ipcMain.handle('hooks:list', (_event, { cwd } = {}) => hooks.list(cwd || projectPath()));
 
@@ -613,11 +629,13 @@ async function setup() {
   settings = new SettingsStore(userData());
   mcp = new McpManager(userData());
   hooks = new HooksManager(userData());
+  agents = new AgentRegistry(userData());
   engine = new Engine({
     sessions,
     keys,
     mcp,
     hooks,
+    agents,
     emit,
     ask: requestPermission,
     askUser: requestQuestion,

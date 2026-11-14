@@ -36,10 +36,13 @@ function matcherMatches(matcher, value) {
 
 function runShellHook(command, payload, cwd, timeoutMs = 10000) {
   return new Promise((resolve) => {
+    const basePath = process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin';
+    const mergedPath = [...new Set(['/opt/homebrew/bin', '/usr/local/bin', ...basePath.split(':')])].join(':');
     const child = spawn('/bin/zsh', ['-lc', command], {
       cwd: cwd || process.cwd(),
       env: {
         ...process.env,
+        PATH: mergedPath,
         CAELIX_HOOK_EVENT: String(payload.event || ''),
         CAELIX_PROJECT_DIR: String(cwd || ''),
       },
@@ -82,9 +85,42 @@ function runShellHook(command, payload, cwd, timeoutMs = 10000) {
   });
 }
 
+const DEFAULT_HOOKS = [
+  {
+    id: 'builtin_shell_guard',
+    event: 'PreToolUse',
+    matcher: '^bash$',
+    command: "/usr/bin/python3 -c 'import json,re,sys; d=json.load(sys.stdin); cmd=(d.get(\"input\") or {}).get(\"command\",\"\"); bad=re.search(r\"(^|[;&|]\\s*)(rm\\s+-[rf]*\\s+(/|~|/Users)|mkfs\\b|diskutil\\s+erase|dd\\s+[^\\n]*of=/dev)\",cmd); bad and (sys.stderr.write(\"Blocked destructive shell command by CAELIX shell-guard hook.\\n\"), sys.exit(2))'",
+    enabled: true,
+    timeoutMs: 5000,
+  },
+  {
+    id: 'builtin_secret_guard',
+    event: 'PreToolUse',
+    matcher: '^(write_file|edit_file|multi_edit)$',
+    command: "/usr/bin/python3 -c 'import json,os,re,sys; d=json.load(sys.stdin); p=os.path.basename((d.get(\"input\") or {}).get(\"path\",\"\")); re.match(r\"^(\\.env(\\..*)?|.*\\.(pem|key|p12)|id_(rsa|ed25519)|keys\\.enc)$\",p,re.I) and (sys.stderr.write(f\"Blocked modifying secret/key file {p} by CAELIX secret-guard hook.\\n\"), sys.exit(2))'",
+    enabled: true,
+    timeoutMs: 5000,
+  },
+  {
+    id: 'builtin_syntax_check',
+    event: 'PostToolUse',
+    matcher: '^(write_file|edit_file|multi_edit)$',
+    command: "/usr/bin/python3 -c 'import json,os,subprocess,sys; d=json.load(sys.stdin); p=(d.get(\"input\") or {}).get(\"path\",\"\"); full=os.path.join(d.get(\"cwd\",\".\"), p) if p else \"\";\nif full.endswith(\".json\") and os.path.isfile(full):\n try: json.load(open(full))\n except Exception as e: print(f\"JSON syntax warning in {p}: {e}\")\nelif full.endswith((\".js\",\".mjs\",\".cjs\")) and os.path.isfile(full):\n r=subprocess.run([\"node\",\"--check\",full],capture_output=True,text=True)\n if r.returncode!=0: print((r.stderr or r.stdout).strip()[:400])'",
+    enabled: true,
+    timeoutMs: 5000,
+  },
+];
+
 class HooksManager {
   constructor(userDataDir) {
     this.userFile = path.join(userDataDir, 'hooks.json');
+    this.ensureDefaults();
+  }
+
+  ensureDefaults() {
+    if (fs.existsSync(this.userFile)) return;
+    safeWriteJson(this.userFile, { hooks: DEFAULT_HOOKS });
   }
 
   projectFile(cwd) {

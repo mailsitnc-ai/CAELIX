@@ -1,8 +1,16 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+
+function extraPathEnv(extra = {}) {
+  const base = process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin';
+  const parts = ['/opt/homebrew/bin', '/usr/local/bin', ...base.split(':')];
+  const merged = [...new Set(parts.filter(Boolean))].join(':');
+  return { ...process.env, ...extra, PATH: merged };
+}
 
 function safeReadJson(file) {
   try {
@@ -39,10 +47,16 @@ class StdioMcpClient {
   async connect(cwd) {
     if (this.connected && this.child && !this.child.killed) return this.tools;
     this.close();
-    const command = String(this.config.command || '').trim();
+    let command = String(this.config.command || '').trim();
+    let args = Array.isArray(this.config.args) ? this.config.args.map(String) : [];
+    const env = extraPathEnv(this.config.env || {});
+    if (this.config.builtin) {
+      command = process.execPath;
+      args = [path.join(__dirname, 'mcp-builtin.js'), '--server', String(this.config.builtin)];
+      if (this.config.memoryFile) args.push('--file', String(this.config.memoryFile));
+      env.ELECTRON_RUN_AS_NODE = '1';
+    }
     if (!command) throw new Error(`MCP server "${this.name}" has no command.`);
-    const args = Array.isArray(this.config.args) ? this.config.args.map(String) : [];
-    const env = { ...process.env, ...(this.config.env || {}) };
     this.child = spawn(command, args, {
       cwd: cwd || process.cwd(),
       env,
@@ -220,9 +234,59 @@ class HttpMcpClient {
 
 class McpManager {
   constructor(userDataDir) {
+    this.userDataDir = userDataDir;
     this.userFile = path.join(userDataDir, 'mcp.json');
+    this.memoryFile = path.join(userDataDir, 'mcp-memory.json');
     this.clients = new Map();
     this.toolMap = new Map();
+    this.ensureDefaults();
+  }
+
+  ensureDefaults() {
+    if (fs.existsSync(this.userFile)) return;
+    safeWriteJson(this.userFile, {
+      mcpServers: {
+        desktop: {
+          enabled: true,
+          builtin: 'desktop',
+          command: 'caelix-builtin',
+          args: ['--server', 'desktop'],
+          description: 'Built-in macOS system info, Git summary, open ports, and clipboard tools',
+        },
+        memory: {
+          enabled: true,
+          builtin: 'memory',
+          command: 'caelix-builtin',
+          args: ['--server', 'memory'],
+          description: 'Built-in cross-chat persistent memory store',
+        },
+      },
+    });
+  }
+
+  importClaudeServers() {
+    const candidates = [
+      path.join(os.homedir(), '.claude.json'),
+      path.join(os.homedir(), '.claude', 'mcp.json'),
+      path.join(os.homedir(), 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
+    ];
+    const current = safeReadJson(this.userFile) || { mcpServers: {} };
+    if (!current.mcpServers || typeof current.mcpServers !== 'object') current.mcpServers = {};
+    let imported = 0;
+    for (const file of candidates) {
+      const cfg = safeReadJson(file);
+      const servers = cfg?.mcpServers;
+      if (!servers || typeof servers !== 'object') continue;
+      for (const [name, entry] of Object.entries(servers)) {
+        if (!entry || typeof entry !== 'object') continue;
+        if (!entry.command && !entry.url) continue;
+        if (current.mcpServers[name]) continue;
+        current.mcpServers[name] = { enabled: entry.enabled !== false, ...entry };
+        imported += 1;
+      }
+    }
+    if (imported > 0) safeWriteJson(this.userFile, current);
+    return imported;
   }
 
   projectFile(cwd) {
@@ -234,14 +298,16 @@ class McpManager {
     const globalCfg = safeReadJson(this.userFile)?.mcpServers || {};
     for (const [name, cfg] of Object.entries(globalCfg)) {
       if (cfg && typeof cfg === 'object') {
-        out.push({ name, scope: 'user', enabled: cfg.enabled !== false, ...cfg });
+        const enriched = cfg.builtin === 'memory' ? { ...cfg, memoryFile: this.memoryFile } : cfg;
+        out.push({ name, scope: 'user', enabled: cfg.enabled !== false, ...enriched });
       }
     }
     if (cwd) {
       const projCfg = safeReadJson(this.projectFile(cwd))?.mcpServers || {};
       for (const [name, cfg] of Object.entries(projCfg)) {
         if (cfg && typeof cfg === 'object') {
-          out.push({ name, scope: 'project', enabled: cfg.enabled !== false, ...cfg });
+          const enriched = cfg.builtin === 'memory' ? { ...cfg, memoryFile: this.memoryFile } : cfg;
+          out.push({ name, scope: 'project', enabled: cfg.enabled !== false, ...enriched });
         }
       }
     }
@@ -302,7 +368,10 @@ class McpManager {
 
   getClient(server) {
     const key = `${server.scope}:${server.name}`;
-    const sig = JSON.stringify({ cmd: server.command, args: server.args, env: server.env, url: server.url, headers: server.headers });
+    const sig = JSON.stringify({
+      builtin: server.builtin, memoryFile: server.memoryFile,
+      cmd: server.command, args: server.args, env: server.env, url: server.url, headers: server.headers,
+    });
     const cached = this.clients.get(key);
     if (cached && cached.sig === sig) return cached.client;
     if (cached) cached.client.close();

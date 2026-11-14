@@ -311,11 +311,12 @@ function toolDefinitions(root) {
     },
     {
       name: 'subagent',
-      description: 'Send one focused research task to a read-only child agent. It reads the project with the read-only tools and returns a short summary; it cannot write or run commands.',
+      description: 'Send one focused task to a specialized child agent (explore, plan, review, verify, general, or any custom agent) in its own isolated context.',
       parameters: {
         type: 'object',
         properties: {
-          task: { type: 'string', description: 'What the child agent should find out.' },
+          agent: { type: 'string', description: 'Agent profile to run: explore (default), plan, review, verify, general, or a custom agent id.' },
+          task: { type: 'string', description: 'What the child agent should investigate, review, plan, or verify.' },
           max_rounds: { type: 'integer', description: 'Maximum investigation rounds, default 4.' },
         },
         required: ['task'],

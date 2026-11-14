@@ -169,8 +169,11 @@ async function run(args) {
   const { Engine } = require('./engine');
   const { McpManager } = require('./engine/mcp');
   const { HooksManager } = require('./engine/hooks');
-  const mcp = new McpManager(path.join(os.homedir(), 'Library', 'Application Support', 'CAELIX'));
-  const hooks = new HooksManager(path.join(os.homedir(), 'Library', 'Application Support', 'CAELIX'));
+  const { AgentRegistry } = require('./engine/agents');
+  const appSupport = path.join(os.homedir(), 'Library', 'Application Support', 'CAELIX');
+  const mcp = new McpManager(appSupport);
+  const hooks = new HooksManager(appSupport);
+  const agents = new AgentRegistry(appSupport);
 
   let wroteText = false;
   const line = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -181,6 +184,7 @@ async function run(args) {
     keys,
     mcp,
     hooks,
+    agents,
     ask: async (request) => {
       if (json) line({ type: 'permission', ...request, decision: args.yes ? 'allow' : 'deny' });
       else note(`permission ${args.yes ? 'granted' : 'denied'}: ${request.action} ${request.target}`);
