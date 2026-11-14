@@ -1,5 +1,16 @@
 # CAELIX changelog
 
+## 0.1.2 — headless CLI and the full local tool set
+
+- Added `caelix run "<prompt>"` with `--cwd`, `--provider`, `--model`, `--mode`, `--yes` and `--json`; it uses the same engine, tools and event stream as the window.
+- Added `caelix tools` and extended `caelix doctor` with harness, key-environment and Electron checks.
+- Added `multi_edit`, `task_start`, `task_list`, `task_stop`, `ask_user`, `present_plan` and `subagent` to the shared tool runner; background tasks have a registry with output files, exit codes and stop control.
+- Permission modes now actually gate the runner: bypass allows in-project actions, accept edits auto-allows file edits, plan denies every non-read action.
+- Keyed providers retry a temporary failure twice with backoff and a visible retry event; a partial stream is never replayed.
+- The window renders question cards with choices and a typed answer, plan cards, and a retry notice.
+- Self-check grew to 13 steps and 8 screenshots, including a real multi-edit, question answer, plan card, and a background task that starts, lists and stops.
+- Added the REA evidence summary to `SPEC.md` with its coverage and its explicit unknowns.
+
 ## 0.1.1 — study screenshots and spec
 
 - Self-check now saves a screenshot for each journey step in `checks/steps/` and requires at least six valid images before it passes.

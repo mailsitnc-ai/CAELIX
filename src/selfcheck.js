@@ -310,6 +310,37 @@ async function run(context) {
     });
     await snap('renamed and mode');
 
+    await step('multi-edit, a question and a plan through the real tools', async () => {
+      await setValue('#prompt', 'Show a multi-edit, ask me one question, and present a plan.');
+      await click('#send-btn');
+      await waitFor('document.querySelector("#question-card")', 12000, 'question card');
+      await click('#question-card [data-answer="Streaming check"]');
+      await waitFor('document.querySelector(".question-answer")', 5000, 'question answer');
+      await waitFor('document.querySelector(".plan-card")', 12000, 'plan card');
+      await waitFor('window.__caelixState.streaming === false', 20000, 'tools turn complete');
+      const note = await fsp.readFile(path.join(workspace, 'caelix-note.md'), 'utf8');
+      if (!note.includes('Multi-edit: applied through the real tool')) throw new Error('multi_edit did not change the note.');
+      const diffs = await evaluate('document.querySelectorAll(".change-item").length');
+      if (diffs < 1) throw new Error('The changes panel is empty.');
+      return 'multi-edit applied, question answered, plan shown';
+    });
+    await snap('question and plan');
+
+    await step('background task starts, lists and stops', async () => {
+      const { ToolRunner, TaskRegistry } = require('./engine/tools');
+      const registry = new TaskRegistry(path.join(checksDir, 'tasks'));
+      const runner = new ToolRunner({
+        root: workspace, mode: 'bypass', ask: async () => 'allow', tasks: registry,
+      });
+      const started = await runner.execute('task_start', { command: 'echo caelix-task-ok; sleep 2', label: 'check' });
+      await sleep(500);
+      const listed = await runner.execute('task_list', {});
+      if (!String(listed.output).includes('caelix-task-ok')) throw new Error('Task output is missing from the list.');
+      const stopped = await runner.execute('task_stop', { id: started.meta.taskId });
+      if (!String(stopped.output).includes('Stopped')) throw new Error('The task did not stop.');
+      return 'task started, listed and stopped';
+    });
+
     await step('collapse and restore the right panel', async () => {
       await click('#panel-toggle');
       await waitFor('document.querySelector("#panel").offsetWidth === 0', 3000, 'panel collapsed');

@@ -37,6 +37,7 @@ let windowReadyMs = null;
 let firstPaintMs = null;
 let lastError = null;
 const pendingPermissions = new Map();
+const pendingQuestions = new Map();
 
 function emit(event) {
   if (win && !win.isDestroyed()) win.webContents.send('chat:event', event);
@@ -66,6 +67,30 @@ function answerPermission(id, decision) {
   pendingPermissions.delete(id);
   clearTimeout(pending.timer);
   pending.resolve(decision === 'deny' ? 'deny' : decision === 'session' ? 'session' : 'allow');
+  return true;
+}
+
+function requestQuestion(request) {
+  return new Promise((resolve) => {
+    const id = `question_${crypto.randomUUID()}`;
+    const timer = setTimeout(() => {
+      if (pendingQuestions.has(id)) {
+        pendingQuestions.delete(id);
+        resolve('No answer (timed out).');
+      }
+    }, 600000);
+    pendingQuestions.set(id, { resolve, timer });
+    emit({ type: 'question-request', id, ...request });
+  });
+}
+
+function answerQuestion(id, answer) {
+  const pending = pendingQuestions.get(id);
+  if (!pending) return false;
+  pendingQuestions.delete(id);
+  clearTimeout(pending.timer);
+  const clean = String(answer ?? '').trim().slice(0, 4000);
+  pending.resolve(clean || 'No answer.');
   return true;
 }
 
@@ -329,6 +354,12 @@ function registerIpc() {
 
   ipcMain.handle('permission:respond', (_event, { id, decision }) => answerPermission(id, decision));
 
+  ipcMain.handle('question:respond', (_event, { id, answer }) => answerQuestion(id, answer));
+
+  ipcMain.handle('tasks:list', () => engine.tasks.list());
+
+  ipcMain.handle('tasks:stop', (_event, id) => engine.tasks.stop(id));
+
   ipcMain.handle('terminal:run', async (_event, { sessionId, command }) => engine.runTerminal(sessionId, command));
 
   ipcMain.handle('shell:open-external', (_event, url) => {
@@ -351,6 +382,7 @@ async function setup() {
     keys,
     emit,
     ask: requestPermission,
+    askUser: requestQuestion,
     claudePath: path.join(os.homedir(), '.local', 'bin', 'claude'),
   });
 

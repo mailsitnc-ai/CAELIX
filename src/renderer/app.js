@@ -45,6 +45,8 @@ const MODES = [
 const TOOL_LABELS = {
   read_file: 'Read', write_file: 'Write', edit_file: 'Edit', list_dir: 'List',
   glob: 'Glob', grep: 'Grep', bash: 'Terminal', todo_write: 'Tasks', web_fetch: 'Fetch',
+  multi_edit: 'Multi-edit', task_start: 'Task', task_list: 'Tasks', task_stop: 'Stop task',
+  ask_user: 'Question', present_plan: 'Plan', subagent: 'Subagent',
 };
 
 function escapeHtml(text) {
@@ -553,8 +555,57 @@ function appendPermission(request) {
   scrollToBottom();
 }
 
-function appendError(message) {
+function appendQuestion(request) {
+  if (!state.currentAssistant) ensureLiveAssistant();
   const card = document.createElement('div');
+  card.className = 'question-card';
+  card.id = 'question-card';
+  const options = Array.isArray(request.options) ? request.options : [];
+  card.innerHTML = `
+    <div class="question-title"><span>?</span>CAELIX asks</div>
+    <div class="question-text">${escapeHtml(request.question || '')}</div>
+    <div class="question-options">${options.map((option) => `<button data-answer="${escapeHtml(option)}">${escapeHtml(option)}</button>`).join('')}</div>
+    ${request.allowOther === false ? '' : '<div class="question-other"><input id="question-input" placeholder="Or type an answer" aria-label="Your answer"><button id="question-send">Answer</button></div>'}`;
+
+  const finish = async (answer) => {
+    if (card.dataset.answered) return;
+    card.dataset.answered = 'yes';
+    for (const button of $$('button', card)) button.disabled = true;
+    const input = $('#question-input', card);
+    if (input) input.disabled = true;
+    const note = document.createElement('div');
+    note.className = 'question-answer';
+    note.textContent = `Answer: ${answer}`;
+    card.appendChild(note);
+    await api.invoke('question:respond', { id: request.id, answer });
+  };
+
+  for (const button of $$('[data-answer]', card)) {
+    button.addEventListener('click', () => finish(button.dataset.answer));
+  }
+  const send = $('#question-send', card);
+  if (send) {
+    send.addEventListener('click', () => {
+      const value = $('#question-input', card).value.trim();
+      if (value) finish(value);
+    });
+  }
+  state.currentAssistant.body.appendChild(card);
+  scrollToBottom();
+}
+
+function appendPlan(event) {
+  if (!state.currentAssistant) ensureLiveAssistant();
+  const card = document.createElement('div');
+  card.className = 'plan-card';
+  card.innerHTML = `
+    <div class="plan-head"><span class="plan-badge">Plan</span><span class="plan-title">${escapeHtml(event.title || 'Proposed plan')}</span></div>
+    <div class="plan-body md">${renderMarkdown(event.plan || '')}</div>`;
+  state.currentAssistant.body.appendChild(card);
+  scrollToBottom();
+}
+
+function appendError(message) {  const card = document.createElement('div');
   card.className = 'error-card';
   card.textContent = message;
   if (state.currentAssistant) state.currentAssistant.body.appendChild(card);
@@ -596,6 +647,15 @@ function onChatEvent(event) {
       break;
     case 'permission-request':
       appendPermission(event);
+      break;
+    case 'question-request':
+      appendQuestion(event);
+      break;
+    case 'plan':
+      appendPlan(event);
+      break;
+    case 'retry':
+      toast(`Provider error. Retrying (${event.attempt}) in ${Math.round((event.waitMs || 0) / 100) / 10}s.`);
       break;
     case 'change':
       state.changes.push(event);

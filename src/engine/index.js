@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
-const { ToolRunner, toolDefinitions } = require('./tools');
+const { ToolRunner, TaskRegistry, toolDefinitions } = require('./tools');
 const { PROVIDERS, streamOpenAICompatible } = require('./providers');
 const { diffLines } = require('./diff');
 
@@ -29,7 +29,9 @@ class Engine {
     this.keys = options.keys;
     this.emit = options.emit;
     this.ask = options.ask;
+    this.askUser = options.askUser;
     this.claudePath = options.claudePath;
+    this.tasks = new TaskRegistry(options.taskDir);
     this.controllers = new Map();
     this.allowances = new Map();
   }
@@ -97,6 +99,10 @@ class Engine {
       root: session.cwd,
       mode: session.mode,
       signal: controller.signal,
+      tasks: this.tasks,
+      questioner: this.askUser
+        ? (request) => this.askUser({ sessionId, ...request })
+        : null,
       ask: async (request) => {
         if (session.mode === 'plan' && request.risk !== 'read') return 'deny';
         return this.ask({ sessionId, ...request });
@@ -128,24 +134,12 @@ class Engine {
             session, messages, emit, signal: controller.signal,
           });
         } else {
-          const key = this.keys.get(session.provider);
-          if (!key) throw new Error(`No ${provider.name} key is saved. Open Keys and add one.`);
-          const conversation = this.conversation(session, messages);
-          const tools = toolDefinitions(session.cwd);
-          let textOut = '';
-          result = await streamOpenAICompatible({
-            provider: session.provider,
-            model: session.model,
-            apiKey: key,
-            messages: conversation,
-            tools,
+          result = await this.callKeyed({
+            session,
+            messages,
+            emit,
             signal: controller.signal,
-            onDelta: (delta) => {
-              textOut += delta;
-              emit({ type: 'text', delta });
-            },
           });
-          result.text = result.text || textOut;
         }
 
         usage = result.usage || usage;
@@ -165,7 +159,9 @@ class Engine {
           emit({ type: 'tool-start', id: call.id, name: call.name, input: call.input });
           const toolStarted = Date.now();
           try {
-            const output = await runner.execute(call.name, call.input);
+            const output = call.name === 'subagent'
+              ? await this.runSubagent({ session, call, emit, signal: controller.signal })
+              : await runner.execute(call.name, call.input);
             if (output.todos) todos = output.todos;
             emit({
               type: 'tool-result',
@@ -231,6 +227,189 @@ class Engine {
     }
   }
 
+  async callKeyed({ session, messages, emit, signal }) {
+    const provider = PROVIDERS[session.provider];
+    const key = this.keys.get(session.provider);
+    if (!key) throw new Error(`No ${provider.name} key is saved. Open Keys and add one.`);
+    const conversation = this.conversation(session, messages);
+    const tools = toolDefinitions(session.cwd);
+    let emitted = false;
+    let attempt = 0;
+
+    for (;;) {
+      let textOut = '';
+      try {
+        const result = await streamOpenAICompatible({
+          provider: session.provider,
+          model: session.model,
+          apiKey: key,
+          messages: conversation,
+          tools,
+          signal,
+          onDelta: (delta) => {
+            textOut += delta;
+            emitted = true;
+            emit({ type: 'text', delta });
+          },
+        });
+        result.text = result.text || textOut;
+        return result;
+      } catch (error) {
+        if (signal?.aborted) throw new Error('Cancelled.');
+        const status = Number((String(error.message).match(/returned (\d{3})/) || [])[1] || 0);
+        const retryable = status === 408 || status === 429 || status >= 500
+          || /fetch failed|network|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(error.message);
+        if (!retryable || emitted || attempt >= 2) throw error;
+        attempt += 1;
+        const waitMs = 600 * 2 ** (attempt - 1);
+        emit({ type: 'retry', attempt, waitMs, message: error.message });
+        await sleep(waitMs);
+        if (signal?.aborted) throw new Error('Cancelled.');
+      }
+    }
+  }
+
+  async runSubagent({ session, call, emit, signal }) {
+    const task = String(call.input?.task || '').trim();
+    if (!task) throw new Error('The subagent task is empty.');
+    const maxRounds = Math.min(8, Math.max(1, Number(call.input?.max_rounds) || 4));
+    const runner = new ToolRunner({
+      root: session.cwd,
+      mode: 'bypass',
+      signal,
+      ask: async () => 'allow',
+      emit: (event) => emit({ type: 'subagent-event', parentId: call.id, ...event }),
+    });
+    emit({ type: 'subagent-start', id: call.id, task });
+    let summary = '';
+
+    if (session.provider === 'simulator') {
+      summary = await this.localSubagent(runner, task);
+    } else if (session.provider === 'claude') {
+      summary = await this.claudeSubagent(session, task, signal);
+    } else {
+      const provider = PROVIDERS[session.provider];
+      const key = this.keys.get(session.provider);
+      if (!key) throw new Error(`No ${provider.name} key is saved.`);
+      const readTools = toolDefinitions(session.cwd)
+        .filter((tool) => ['read_file', 'list_dir', 'glob', 'grep'].includes(tool.name));
+      const conversation = [
+        { role: 'system', content: `You are a read-only research subagent for CAELIX. Investigate inside ${session.cwd} with read_file, list_dir, glob and grep only. Never write, run a command or ask a question. Return a compact factual summary with file paths and line numbers.` },
+        { role: 'user', content: task },
+      ];
+      let rounds = 0;
+      while (rounds < maxRounds) {
+        rounds += 1;
+        const result = await streamOpenAICompatible({
+          provider: session.provider,
+          model: session.model,
+          apiKey: key,
+          messages: conversation,
+          tools: readTools,
+          signal,
+          onDelta: () => {},
+        });
+        if (!result.toolCalls.length) {
+          summary = result.text || '';
+          break;
+        }
+        conversation.push({ role: 'assistant', content: result.text || '', toolCalls: result.toolCalls });
+        for (const item of result.toolCalls) {
+          if (!['read_file', 'list_dir', 'glob', 'grep'].includes(item.name)) {
+            conversation.push({ role: 'tool', toolCallId: item.id, content: 'Error: the subagent may only read.' });
+            continue;
+          }
+          try {
+            const output = await runner.execute(item.name, item.input);
+            conversation.push({ role: 'tool', toolCallId: item.id, content: output.output });
+          } catch (error) {
+            conversation.push({ role: 'tool', toolCallId: item.id, content: `Error: ${error.message}` });
+          }
+        }
+      }
+    }
+
+    emit({ type: 'subagent-end', id: call.id, summary });
+    return { output: summary || 'The subagent returned no summary.', meta: { rounds: maxRounds } };
+  }
+
+  async localSubagent(runner, task) {
+    const listing = await runner.listDir({ path: '.' });
+    const files = await runner.glob({ pattern: '**/*' });
+    const names = String(files.output).split('\n').filter(Boolean).slice(0, 40);
+    const lines = [
+      `Read-only scan for: ${task}`,
+      '',
+      'Top level:',
+      listing.output.split('\n').slice(0, 20).join('\n'),
+      '',
+      `Files (${files.meta?.count ?? names.length}):`,
+      names.slice(0, 20).join('\n'),
+    ];
+    for (const name of names) {
+      if (!/\.(md|txt|json|js|ts|tsx|jsx|html|css|py|go|rs|sh|yml|yaml)$/i.test(name)) continue;
+      try {
+        const read = await runner.readFile({ path: name, limit: 40 });
+        if (read.meta?.lines) {
+          lines.push('', `--- ${name} (${read.meta.lines} lines) ---`, String(read.output).split('\n').slice(0, 12).join('\n'));
+        }
+      } catch {
+        // an unreadable file is skipped
+      }
+      if (lines.length > 60) break;
+    }
+    return lines.join('\n');
+  }
+
+  async claudeSubagent(session, task, signal) {
+    const claude = this.claudePath || path.join(os.homedir(), '.local', 'bin', 'claude');
+    if (!claude || !fs.existsSync(claude)) throw new Error('Claude Code was not found.');
+    return new Promise((resolve, reject) => {
+      const child = spawn(claude, [
+        '-p', task,
+        '--output-format', 'text',
+        '--permission-mode', 'plan',
+        '--allowedTools', 'Read,Glob,Grep',
+        '--max-turns', '6',
+      ], {
+        cwd: session.cwd,
+        env: { ...process.env },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: true,
+      });
+      let out = '';
+      let err = '';
+      let settled = false;
+      const finish = (error, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (signal) signal.removeEventListener('abort', abort);
+        if (error) reject(error);
+        else resolve(value);
+      };
+      const abort = () => {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ }
+        finish(new Error('Cancelled.'));
+      };
+      const timer = setTimeout(() => {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ }
+        finish(new Error('The subagent timed out.'));
+      }, 180000);
+      if (signal) {
+        if (signal.aborted) return abort();
+        signal.addEventListener('abort', abort, { once: true });
+      }
+      child.stdout.on('data', (chunk) => { out += chunk.toString(); });
+      child.stderr.on('data', (chunk) => { err += chunk.toString().slice(0, 2000); });
+      child.on('error', (error) => finish(error));
+      child.on('close', (code) => {
+        if (code !== 0 && !out.trim()) finish(new Error(err.trim() || `claude exited with code ${code}.`));
+        else finish(null, out.trim());
+      });
+    });
+  }
+
   async streamWords(text, emit, signal, delay = 7) {
     const pieces = String(text).match(/\S+\s*/g) || [];
     for (const piece of pieces) {
@@ -241,6 +420,57 @@ class Engine {
   }
 
   async runSimulator({ session, messages, round, emit, signal, runner }) {
+    const userText = String(messages.filter((message) => message.role === 'user').slice(-1)[0]?.content || '');
+    const toolsDemo = /multi-edit/i.test(userText);
+
+    if (toolsDemo) {
+      if (round === 1) {
+        const text = 'I will use the multi-edit tool on the note, ask you one short question, and show the plan as a card.\n\n';
+        await this.streamWords(text, emit, signal);
+        return {
+          text,
+          toolCalls: [
+            {
+              id: 'sim_multi_edit',
+              name: 'multi_edit',
+              input: {
+                edits: [{
+                  path: 'caelix-note.md',
+                  old_string: '- Provider: CAELIX Simulator',
+                  new_string: '- Provider: CAELIX Simulator\n- Multi-edit: applied through the real tool',
+                }],
+              },
+            },
+            {
+              id: 'sim_question',
+              name: 'ask_user',
+              input: {
+                question: 'Which check should run next?',
+                options: ['Streaming check', 'Terminal check'],
+                allow_other: true,
+              },
+            },
+            {
+              id: 'sim_plan',
+              name: 'present_plan',
+              input: {
+                title: 'Next steps',
+                plan: '1. Keep the note and its diff.\n2. Run the terminal check.\n3. Review the change before committing.',
+              },
+            },
+          ],
+          usage: { prompt_tokens: 150, completion_tokens: 60, total_tokens: 210 },
+        };
+      }
+      const text = 'The multi-edit is applied, your answer was recorded and the plan is on screen. Everything ran through the real tools.';
+      await this.streamWords(text, emit, signal);
+      return {
+        text,
+        toolCalls: [],
+        usage: { prompt_tokens: 240, completion_tokens: 80, total_tokens: 320 },
+      };
+    }
+
     if (round === 1) {
       const existing = fs.existsSync(path.join(session.cwd, 'caelix-note.md'));
       const text = existing

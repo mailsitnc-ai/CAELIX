@@ -10,6 +10,7 @@ This document records how the two reference surfaces behave: the `claude` comman
 | Full CLI help and auth status | Real flags, subcommands, auth state, version | `study/claude-help.txt`, `study/claude-doctor.txt` |
 | Print-mode start-up record | Exact tool list, model id, permission mode, slash commands, agents, skills, plugins for this machine | `study/print-mode-test.txt` |
 | Shipped strings and the unpacked app copy | Exact UI labels, permission choices, mode names, IPC families, stylesheet tokens | `study/claude-strings.txt`, `study/rea/claude-app-unpacked/` |
+| REA 6.9.0 static analysis of the unpacked copy | Verified entrypoints, renderer pages, IPC graph counts, bridge API names, and explicit coverage limits | `study/rea/claude-app-analysis.json`, `study/rea/claude-app-evidence.zip` |
 | CAELIX self-check | Our own window timing, streaming latency, memory, screenshot | `checks/selfcheck.json`, `checks/selfcheck.png` |
 
 **Marks used on every item**
@@ -22,6 +23,14 @@ This document records how the two reference surfaces behave: the `claude` comman
 
 1. The installed CLI reports `loggedIn: false`, `authMethod: none`. A print-mode run reaches the harness and returns an authentication failure, so model reasoning, live token streaming, permission dialogs, and real file edits through the reference harness are **unknown** here. Their shapes are documented and shipped, so the structure is **seen**; the live behaviour is marked unknown.
 2. Launching the installed desktop app would restore the user's existing session store, which is forbidden. The Code tab is therefore specified from the official desktop page, the app's shipped strings, and its stylesheet, not from opening the user's chats. Pixel comparison is deferred to phase 3 with an isolated profile.
+
+**What the static analysis added.** REA examined 1,002 relevant files, parsed 770 JavaScript files (14 skipped, 0 parse failures, 9.75 million AST nodes), and confirmed the shell's shape without running it:
+
+- The Electron main entry is `.vite/build/index.pre.js`.
+- The renderer pages are `main_window/index.html`, `about_window/about.html`, `quick_window/quick-window.html`, `file_viewer/fileViewer.html`, `find_in_page/find-in-page.html`, `local_exec_consent/localExecConsent.html`, `buddy_window/buddy.html`, `config_template_window/configTemplate.html`, plus the design, slides, and shell frames under `resources/frame/`.
+- It found 144 IPC channel nodes, 42 IPC handler/listener nodes, 24 context-bridge APIs, and 11 renderer entrypoints.
+- Named bridge APIs include `buddy.getPathForFile`, `cowork` with `askClaude`, `callMcpTool`, and `runScheduledTask`, `claudeDesktopArtifactPane` with `chrome`, `embedded`, and `platform`, and `omeletteDesktopPdf.printFrameToPdf`.
+- The limits matter: 143 of the 144 channel expressions are dynamic, 1,510 application and 40,934 semantic relationships remain unknown, and 174 sources that load Electron were not fully examined. Exact channel names and the handler wiring therefore remain **unknown**; the Code view's behaviour is still specified from the UI strings, the documentation, and the stylesheet, not from resolved IPC.
 
 ---
 
@@ -242,6 +251,16 @@ The Code tab is a three-part workspace: a session list, the chat with its prompt
 | 154 | Themes | Dark and light with the same layout | Tokenised colors switch by appearance | Switch appearance and confirm contrast and layout | seen (docs) / guessed (exact palette) |
 
 **Layout numbers used for the CAELIX first pass (to be corrected by phase 3 comparison):** top bar 48 px; session list 260 px; right panel 380 px; transcript max width 800 px; composer radius 16 px; window 1440 × 900 with a 1040 × 680 minimum. **guessed** until the screenshot comparison.
+
+**Observed tokens and labels from the shipped renderer (seen):**
+
+- The reference dark theme is a warm neutral ramp, not blue: `#0b0b0b` at the darkest end, `#20201f`, `#2c2c2a`, `#52514e`, `#898781`, and `#f0efec` at the light end. CAELIX keeps its own navy identity; only the hierarchy is copied.
+- Accent roles include a clay `hsl(15 63.1% 59.6%)` and a blue `hsl(210 70.9% 51.6%)`. The UI separates brand, accent, success, warning, and danger roles.
+- The interface uses a humanist sans with a display cut and system fallbacks; code uses SF Mono, Menlo, or a monospace fallback.
+- Permission mode labels in the desktop app are exactly **Manual**, **Accept edits**, **Plan**, **Auto**, and **Bypass permissions**. The CLI adds **Don't ask**.
+- Permission prompt actions are **Always allow**, **Allow once**, and **Cancel**. Tool policy rows offer **Always allow**, **Ask each time**, **Ask once per session**, and **Blocked**.
+- Pane menu actions use paired labels such as **Show Changes** / **Hide Changes** and **Show Browser** / **Hide Browser**.
+- The session title bar hosts the title, mode, model, effort, pane buttons, and an overflow menu; the session rail is toggled as **Show session rail** / **Hide session rail**.
 
 ---
 

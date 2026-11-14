@@ -2,7 +2,9 @@
 
 const fs = require('fs');
 const fsp = require('fs/promises');
+const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { diffLines } = require('./diff');
 
@@ -183,16 +185,105 @@ function toolDefinitions(root) {
         required: ['url'],
       },
     },
+    {
+      name: 'multi_edit',
+      description: 'Apply several exact-string replacements in one call. Each edit names a file, the unique old text and the replacement. Use this for a coordinated change across files.',
+      parameters: {
+        type: 'object',
+        properties: {
+          edits: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                path: { type: 'string', description: 'File path, relative to the project.' },
+                old_string: { type: 'string' },
+                new_string: { type: 'string' },
+                replace_all: { type: 'boolean' },
+              },
+              required: ['path', 'old_string', 'new_string'],
+            },
+          },
+        },
+        required: ['edits'],
+      },
+    },
+    {
+      name: 'task_start',
+      description: 'Start a shell command in the background and return its task id and output file. Use task_list to read progress and task_stop to end it.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string' },
+          label: { type: 'string', description: 'Short name for the task list.' },
+          timeout_ms: { type: 'integer', description: 'Optional automatic stop after this many milliseconds.' },
+        },
+        required: ['command'],
+      },
+    },
+    {
+      name: 'task_list',
+      description: 'List background tasks started in this project with their status, exit code and recent output.',
+      parameters: { type: 'object', properties: {} },
+    },
+    {
+      name: 'task_stop',
+      description: 'Stop a running background task by id.',
+      parameters: {
+        type: 'object',
+        properties: { id: { type: 'string' } },
+        required: ['id'],
+      },
+    },
+    {
+      name: 'ask_user',
+      description: 'Ask the user a question with optional choices and wait for the answer. Use it only when a decision blocks the work.',
+      parameters: {
+        type: 'object',
+        properties: {
+          question: { type: 'string' },
+          options: { type: 'array', items: { type: 'string' }, description: 'Optional quick choices.' },
+          allow_other: { type: 'boolean', description: 'Allow a typed answer as well as the choices.' },
+        },
+        required: ['question'],
+      },
+    },
+    {
+      name: 'present_plan',
+      description: 'Show a written plan to the user as a reviewable card without changing any file.',
+      parameters: {
+        type: 'object',
+        properties: {
+          plan: { type: 'string', description: 'The plan in Markdown.' },
+          title: { type: 'string' },
+        },
+        required: ['plan'],
+      },
+    },
+    {
+      name: 'subagent',
+      description: 'Send one focused research task to a read-only child agent. It reads the project with the read-only tools and returns a short summary; it cannot write or run commands.',
+      parameters: {
+        type: 'object',
+        properties: {
+          task: { type: 'string', description: 'What the child agent should find out.' },
+          max_rounds: { type: 'integer', description: 'Maximum investigation rounds, default 4.' },
+        },
+        required: ['task'],
+      },
+    },
   ].map((tool) => ({ ...tool, description: `${tool.description} The project root is ${root}.` }));
 }
 
 class ToolRunner {
-  constructor({ root, mode, signal, ask, emit }) {
+  constructor({ root, mode, signal, ask, emit, tasks, questioner }) {
     this.root = path.resolve(root);
     this.mode = mode || 'ask';
     this.signal = signal;
     this.ask = ask;
     this.emit = emit;
+    this.tasks = tasks || null;
+    this.questioner = questioner || null;
   }
 
   resolvePath(input, { mustExist = false } = {}) {
@@ -211,6 +302,9 @@ class ToolRunner {
   }
 
   async permission(tool, action, target, detail, risk = 'normal') {
+    if (this.mode === 'plan' && risk !== 'read') return 'deny';
+    if (this.mode === 'bypass') return 'allow';
+    if (this.mode === 'accept' && (tool === 'write_file' || tool === 'edit_file' || tool === 'multi_edit')) return 'allow';
     const key = `${tool}:${target}`;
     if (this.sessionAllowed?.has(key)) return 'allow';
     const decision = await this.ask({ tool, action, target, detail, risk });
@@ -234,6 +328,12 @@ class ToolRunner {
       case 'bash': return this.bash(input);
       case 'todo_write': return this.todoWrite(input);
       case 'web_fetch': return this.webFetch(input);
+      case 'multi_edit': return this.multiEdit(input);
+      case 'task_start': return this.taskStart(input);
+      case 'task_list': return this.taskList(input);
+      case 'task_stop': return this.taskStop(input);
+      case 'ask_user': return this.askUser(input);
+      case 'present_plan': return this.presentPlan(input);
       default: throw new Error(`Unknown tool: ${name}`);
     }
   }
@@ -305,6 +405,58 @@ class ToolRunner {
       deletions: diff.deletions,
     });
     return { output: `Edited ${relative} (${diff.additions} added, ${diff.deletions} removed).`, change: { file: relative, before, after, ...diff } };
+  }
+
+  async multiEdit(input) {
+    const edits = Array.isArray(input.edits) ? input.edits : [];
+    if (!edits.length) throw new Error('Provide at least one edit.');
+    const byFile = new Map();
+    for (const edit of edits) {
+      const file = this.resolvePath(edit.path, { mustExist: true });
+      if (!byFile.has(file)) byFile.set(file, []);
+      byFile.get(file).push(edit);
+    }
+    const planned = [];
+    for (const [file, fileEdits] of byFile) {
+      const before = await fsp.readFile(file, 'utf8');
+      let after = before;
+      for (const edit of fileEdits) {
+        const oldString = String(edit.old_string ?? '');
+        const newString = String(edit.new_string ?? '');
+        if (!oldString) throw new Error(`An empty old_string was given for ${path.relative(this.root, file)}.`);
+        const count = after.split(oldString).length - 1;
+        if (count === 0) throw new Error(`The old text was not found in ${path.relative(this.root, file)}.`);
+        if (count > 1 && !edit.replace_all) throw new Error(`The old text occurs ${count} times in ${path.relative(this.root, file)}. Provide more context or set replace_all.`);
+        after = edit.replace_all ? after.split(oldString).join(newString) : after.replace(oldString, newString);
+      }
+      planned.push({ file, before, after });
+    }
+    const changed = planned.filter((item) => item.before !== item.after);
+    if (!changed.length) return { output: 'No file changed.', meta: { files: 0 } };
+    const decision = await this.permission(
+      'multi_edit',
+      'Edit files',
+      changed.map((item) => path.relative(this.root, item.file)).join(', '),
+      `${edits.length} replacement(s) in ${changed.length} file(s)`,
+      'write',
+    );
+    if (decision !== 'allow') throw new Error('The user denied this multi-file edit.');
+    const summary = [];
+    for (const item of changed) {
+      await fsp.writeFile(item.file, item.after, 'utf8');
+      const relative = path.relative(this.root, item.file);
+      const diff = diffLines(item.before, item.after);
+      this.emit?.({
+        type: 'change',
+        file: relative,
+        before: item.before,
+        after: item.after,
+        additions: diff.additions,
+        deletions: diff.deletions,
+      });
+      summary.push(`${relative} (+${diff.additions} −${diff.deletions})`);
+    }
+    return { output: `Edited ${summary.join(', ')}.`, meta: { files: changed.length } };
   }
 
   async listDir(input) {
@@ -452,6 +604,69 @@ class ToolRunner {
     return { output: `Updated ${items.length} task(s).`, todos: items };
   }
 
+  async taskStart(input) {
+    if (!this.tasks) throw new Error('Background tasks are not available on this surface.');
+    const command = String(input.command || '').trim();
+    if (!command) throw new Error('Command is empty.');
+    const decision = await this.permission('task_start', 'Start background task', command.slice(0, 160), command.slice(0, 300), 'shell');
+    if (decision !== 'allow') throw new Error('The user denied this background task.');
+    const task = this.tasks.start({
+      command,
+      cwd: this.root,
+      label: input.label,
+      timeoutMs: Math.min(3_600_000, Math.max(0, Number(input.timeout_ms) || 0)),
+    });
+    this.emit?.({ type: 'task-started', task });
+    return {
+      output: `Started ${task.id}: ${command}\nStatus: ${task.status}\nOutput file: ${task.outputFile}`,
+      meta: { taskId: task.id, outputFile: task.outputFile },
+    };
+  }
+
+  async taskList() {
+    if (!this.tasks) return { output: 'No background tasks.', meta: { count: 0 } };
+    const tasks = this.tasks.list();
+    if (!tasks.length) return { output: 'No background tasks.', meta: { count: 0 } };
+    const lines = tasks.map((task) => [
+      `${task.id}  ${task.status}${task.exitCode === null ? '' : ` (exit ${task.exitCode})`}`,
+      `  ${task.command}`,
+      task.recent ? `  ${task.recent.trim().split('\n').slice(-4).join('\n  ')}` : '',
+    ].filter(Boolean).join('\n'));
+    return { output: lines.join('\n\n'), meta: { count: tasks.length } };
+  }
+
+  async taskStop(input) {
+    if (!this.tasks) throw new Error('Background tasks are not available on this surface.');
+    const id = String(input.id || '').trim();
+    if (!id) throw new Error('A task id is required.');
+    const task = this.tasks.stop(id);
+    if (!task) throw new Error(`No task with id ${id}.`);
+    this.emit?.({ type: 'task-stopped', task });
+    return { output: `Stopped ${id}.`, meta: { taskId: id } };
+  }
+
+  async askUser(input) {
+    const question = String(input.question || '').trim();
+    if (!question) throw new Error('A question is required.');
+    if (!this.questioner) throw new Error('This surface cannot ask the user a question.');
+    const options = Array.isArray(input.options) ? input.options.map((option) => String(option)).slice(0, 8) : [];
+    const answer = await this.questioner({
+      question,
+      options,
+      allowOther: input.allow_other !== false,
+    });
+    if (this.signal?.aborted) throw new Error('Cancelled.');
+    return { output: `The user answered: ${answer}`, meta: { answer } };
+  }
+
+  async presentPlan(input) {
+    const plan = String(input.plan || '').trim();
+    if (!plan) throw new Error('The plan is empty.');
+    const title = String(input.title || 'Plan');
+    this.emit?.({ type: 'plan', title, plan });
+    return { output: `The plan "${title}" was shown to the user.`, meta: { chars: plan.length } };
+  }
+
   async webFetch(input) {
     const url = String(input.url || '');
     if (!/^https?:\/\//i.test(url)) throw new Error('Only http and https URLs are allowed.');
@@ -476,4 +691,99 @@ class ToolRunner {
   }
 }
 
-module.exports = { ToolRunner, toolDefinitions };
+class TaskRegistry {
+  constructor(directory) {
+    this.directory = directory || path.join(os.tmpdir(), 'caelix-tasks');
+    this.tasks = new Map();
+  }
+
+  start({ command, cwd, label, timeoutMs = 0 } = {}) {
+    fs.mkdirSync(this.directory, { recursive: true });
+    const id = `task_${crypto.randomBytes(4).toString('hex')}`;
+    const outputFile = path.join(this.directory, `${id}.log`);
+    const stream = fs.createWriteStream(outputFile, { flags: 'a' });
+    const child = spawn('/bin/zsh', ['-lc', String(command)], {
+      cwd,
+      env: { ...process.env, CAELIX: '1', TERM: 'dumb' },
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const task = {
+      id,
+      command: String(command),
+      label: label ? String(label) : '',
+      cwd,
+      outputFile,
+      child,
+      status: 'running',
+      exitCode: null,
+      startedAt: Date.now(),
+      endedAt: null,
+      recent: '',
+    };
+    const capture = (chunk) => {
+      const text = chunk.toString();
+      stream.write(text);
+      task.recent = `${task.recent}${text}`.slice(-4000);
+    };
+    child.stdout.on('data', capture);
+    child.stderr.on('data', capture);
+    child.on('error', (error) => {
+      task.status = 'failed';
+      task.error = error.message;
+      task.endedAt = Date.now();
+      stream.end(`\n[error] ${error.message}\n`);
+    });
+    child.on('close', (code, signal) => {
+      task.status = code === 0 ? 'done' : 'failed';
+      task.exitCode = code;
+      task.signal = signal || null;
+      task.endedAt = Date.now();
+      stream.end();
+    });
+    if (timeoutMs > 0) {
+      const timer = setTimeout(() => this.stop(id), timeoutMs);
+      if (timer.unref) timer.unref();
+    }
+    this.tasks.set(id, task);
+    return this.summary(task);
+  }
+
+  summary(task) {
+    return {
+      id: task.id,
+      label: task.label,
+      command: task.command,
+      status: task.status,
+      exitCode: task.exitCode,
+      outputFile: task.outputFile,
+      startedAt: task.startedAt,
+      endedAt: task.endedAt,
+      recent: task.recent.slice(-1500),
+      error: task.error || null,
+    };
+  }
+
+  list() {
+    return [...this.tasks.values()]
+      .sort((a, b) => b.startedAt - a.startedAt)
+      .map((task) => this.summary(task));
+  }
+
+  stop(id) {
+    const task = this.tasks.get(id);
+    if (!task) return null;
+    if (task.status === 'running') {
+      try { process.kill(-task.child.pid, 'SIGTERM'); } catch { /* already gone */ }
+      const force = setTimeout(() => {
+        try { process.kill(-task.child.pid, 'SIGKILL'); } catch { /* already gone */ }
+      }, 1200);
+      if (force.unref) force.unref();
+      task.status = 'stopped';
+      task.endedAt = Date.now();
+    }
+    return this.summary(task);
+  }
+}
+
+module.exports = { ToolRunner, TaskRegistry, toolDefinitions };
