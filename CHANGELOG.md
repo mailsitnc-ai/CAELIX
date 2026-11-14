@@ -1,7 +1,10 @@
 # CAELIX changelog
 
-## 0.1.9 (icon fix) — transparent Dock & app icon corners
+## 0.1.9 (Groq & timeout/reasoning updates)
 
+- Added **Groq** (`groq`) provider support (`https://api.groq.com/openai/v1/chat/completions`, curated models `llama-3.3-70b-versatile`, `openai/gpt-oss-120b`, `openai/gpt-oss-20b`, `qwen/qwen3.8-27b`, `llama-3.1-8b-instant`, `groq/compound`, live `/openai/v1/models` refresh excluding audio/TTS/guard models, `GROQ_API_KEY` CLI support, and Keys modal slot).
+- Added live `Waiting` / `Queued` / `Thinking` status feedback when reasoning models stream `delta.reasoning_content` / `delta.reasoning` or SSE keepalive comments before visible answer text starts.
+- Added a `35s` first-byte / idle-stall request timeout (`CAELIX_REQUEST_TIMEOUT_MS`) on `streamOpenAICompatible` (`err.noRetry = true`) and a `15s` timeout + active-model check on `keys:test`, plus `Open Keys` / `Switch Model` recovery actions on `404` and `408` errors.
 - Removed opaque white screenshot corners from `assets/icon-1024.png`, `assets/icon.iconset/*.png`, and `assets/icon.icns` with clean inverse-alpha edge unblending (preserving the exact four-point star, colors, and proportions), and rebuilt `dist/CAELIX.app`.
 
 ## 0.1.9 — MCP servers, hooks, slash commands, Helper Agent, rate-limit retries and NVIDIA NIM catalog

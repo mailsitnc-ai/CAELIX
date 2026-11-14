@@ -69,7 +69,7 @@ Markers:
 ## 5. External Providers (`features.md` §3)
 
 - [x] **Encrypted local keystore (`safeStorage`)** — Save, mask (`••••••••real`), reload exclusion from renderer, and delete verified in `npm run selfcheck`; `keys.enc` stored in macOS Application Support outside repository.
-- [x] **NVIDIA NIM catalog & sync** — `36` verified curated NVIDIA models (`deepseek-ai/deepseek-v4.1-flash` default) plus public/keyed `/v1/models` catalog discovery up to `400` models verified in `node checks/verify_features.js` and `npm run selfcheck`.
-- [ ] **Live Gemini / OpenRouter / NVIDIA API keys** — Request formatting, SSE parser, 5-attempt `429` countdown retry loop, array error parsing, model catalog refresh (`providers:refresh`), and custom model ID entry are implemented and SSE+retry tested against local mock HTTP servers (`node checks/verify_features.js`), but live keyed inference calls were not run without user API keys.
+- [x] **NVIDIA NIM & Groq catalogs & sync** — `36` curated NVIDIA models (`deepseek-ai/deepseek-v4.1-flash` default) + live `/v1/models` sync, **Groq** (`groq`) curated chat/coding models + live `/openai/v1/models` sync, `35s` idle/first-byte stall timeout, and `delta.reasoning_content` status feedback verified in `node checks/verify_features.js` and `npm run selfcheck`.
+- [ ] **Live Gemini / OpenRouter / NVIDIA / Groq API keys** — Request formatting, SSE parser, 5-attempt `429` countdown retry loop, array error parsing, model catalog refresh (`providers:refresh`), and custom model ID entry are implemented and SSE+retry+timeout tested against local mock HTTP servers (`node checks/verify_features.js`), but live keyed inference calls were not run without user API keys.
 - [ ] **Optional real `claude` CLI provider** — `Engine.runClaude` JSON-stream subprocess integration implemented and binary detected at `~/.local/bin/claude`, but blocked from live execution because local CLI auth state is unauthenticated (`loggedIn: false`).
 

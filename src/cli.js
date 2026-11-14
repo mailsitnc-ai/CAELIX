@@ -12,6 +12,7 @@ const KEY_ENV = {
   gemini: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
   openrouter: ['OPENROUTER_API_KEY'],
   nvidia: ['NVIDIA_API_KEY'],
+  groq: ['GROQ_API_KEY'],
 };
 
 function check(name, ok, detail) {
@@ -102,7 +103,7 @@ function listTools() {
 function chooseProvider(args) {
   if (args.provider) return String(args.provider);
   if (process.env.CAELIX_PROVIDER) return process.env.CAELIX_PROVIDER;
-  for (const provider of ['gemini', 'openrouter', 'nvidia']) {
+  for (const provider of ['gemini', 'openrouter', 'nvidia', 'groq']) {
     if (envKey(provider)) return provider;
   }
   return 'simulator';
@@ -231,7 +232,7 @@ function help() {
   console.log('CAELIX');
   console.log('  caelix run "<prompt>"  run the harness once and stream its answer');
   console.log('       --cwd DIR         project folder (default: current folder)');
-  console.log('       --provider NAME   gemini | openrouter | nvidia | claude | simulator');
+  console.log('       --provider NAME   gemini | openrouter | nvidia | groq | claude | simulator');
   console.log('       --model ID        any model id, or the provider default');
   console.log('       --mode MODE       ask | accept | plan | bypass');
   console.log('       --json            one JSON event per line');

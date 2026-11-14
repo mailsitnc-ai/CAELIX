@@ -75,6 +75,23 @@ const PROVIDERS = {
     defaultModel: 'deepseek-ai/deepseek-v4.1-flash',
     color: '#76b900',
   },
+  groq: {
+    id: 'groq',
+    name: 'Groq',
+    keyLabel: 'Groq API key',
+    consoleUrl: 'https://console.groq.com/keys',
+    baseUrl: 'https://api.groq.com/openai/v1/chat/completions',
+    models: [
+      'llama-3.3-70b-versatile',
+      'openai/gpt-oss-120b',
+      'openai/gpt-oss-20b',
+      'qwen/qwen3.8-27b',
+      'llama-3.1-8b-instant',
+      'groq/compound',
+    ],
+    defaultModel: 'llama-3.3-70b-versatile',
+    color: '#f55036',
+  },
   claude: {
     id: 'claude',
     name: 'Claude Code (installed CLI)',
@@ -190,6 +207,9 @@ async function readError(response) {
   } catch {
     // keep raw body
   }
+  if (response.status === 404 && /not found for account/i.test(detail)) {
+    detail = `${detail} — Enable "Public API Endpoints" on build.nvidia.com or create a fresh key directly from a model page.`;
+  }
   const err = new Error(`Provider returned ${response.status}${detail ? `: ${detail}` : ''}`);
   err.status = response.status;
   err.retryAfterMs = parseRetryAfterMs(response);
@@ -198,7 +218,8 @@ async function readError(response) {
 
 async function streamOpenAICompatible(options) {
   const {
-    provider, model, apiKey, messages, tools, signal, onDelta,
+    provider, model, apiKey, messages, tools, signal, onDelta, onStatus,
+    timeoutMs = Number(process.env.CAELIX_REQUEST_TIMEOUT_MS) || 35_000,
   } = options;
   const meta = PROVIDERS[provider];
   if (!meta || !meta.baseUrl) throw new Error(`Unknown provider: ${provider}`);
@@ -223,109 +244,212 @@ async function streamOpenAICompatible(options) {
     body.tool_choice = 'auto';
   }
 
-  const response = await fetch(meta.baseUrl, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    signal,
-  });
-  if (!response.ok) throw await readError(response);
-  if (!response.body) throw new Error('The provider returned no response stream.');
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let text = '';
-  const calls = new Map();
-  let usage = null;
-  let finishReason = null;
-
-  const handleLine = (line) => {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith('data:')) return;
-    const data = trimmed.slice(5).trim();
-    if (!data || data === '[DONE]') return;
-    let payload;
-    try {
-      payload = JSON.parse(data);
-    } catch {
-      return;
-    }
-    if (payload.usage) usage = payload.usage;
-    const choice = payload.choices && payload.choices[0];
-    if (!choice) return;
-    if (choice.finish_reason) finishReason = choice.finish_reason;
-    const delta = choice.delta || {};
-    if (typeof delta.content === 'string' && delta.content) {
-      text += delta.content;
-      onDelta(delta.content);
-    }
-    if (Array.isArray(delta.tool_calls)) {
-      for (const part of delta.tool_calls) {
-        const index = part.index || 0;
-        const current = calls.get(index) || { id: '', name: '', arguments: '' };
-        if (part.id) current.id = part.id;
-        if (part.function?.name) current.name += part.function.name;
-        if (part.function?.arguments) current.arguments += part.function.arguments;
-        calls.set(index, current);
-      }
-    }
+  const requestAbort = new AbortController();
+  let timedOut = false;
+  let stallTimer = null;
+  const resetStall = () => {
+    if (stallTimer) clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+      timedOut = true;
+      requestAbort.abort();
+    }, timeoutMs);
   };
+  const onCallerAbort = () => requestAbort.abort();
+  if (signal?.aborted) throw new Error('Cancelled.');
+  if (signal) signal.addEventListener('abort', onCallerAbort, { once: true });
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let newline = buffer.indexOf('\n');
-    while (newline >= 0) {
-      handleLine(buffer.slice(0, newline));
-      buffer = buffer.slice(newline + 1);
-      newline = buffer.indexOf('\n');
-    }
+  let waitNoticeTimer = null;
+  if (typeof onStatus === 'function') {
+    waitNoticeTimer = setTimeout(() => {
+      onStatus({ stage: 'waiting', message: `Waiting for ${meta.name} (${model})…` });
+    }, 2000);
   }
-  if (buffer.trim()) handleLine(buffer);
+  resetStall();
 
-  const toolCalls = [...calls.values()]
-    .filter((call) => call.name)
-    .map((call) => {
-      let input = {};
-      try {
-        input = call.arguments ? JSON.parse(call.arguments) : {};
-      } catch {
-        input = { raw: call.arguments };
+  try {
+    let response;
+    try {
+      response = await fetch(meta.baseUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: requestAbort.signal,
+      });
+    } catch (error) {
+      if (timedOut) {
+        const err = new Error(`${meta.name} (${model}) did not respond within ${Math.round(timeoutMs / 1000)}s. The model may be cold-starting, queued, or unavailable for your key — try switching models or clicking Test in Keys.`);
+        err.status = 408;
+        err.noRetry = true;
+        throw err;
       }
-      return { id: call.id || `call_${Math.random().toString(36).slice(2)}`, name: call.name, input };
-    });
+      if (signal?.aborted) throw new Error('Cancelled.');
+      throw error;
+    }
+    if (!response.ok) throw await readError(response);
+    if (!response.body) throw new Error('The provider returned no response stream.');
 
-  return { text, toolCalls, usage, finishReason };
+    resetStall();
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let text = '';
+    let reasoningChars = 0;
+    let lastReasoningNotice = 0;
+    const calls = new Map();
+    let usage = null;
+    let finishReason = null;
+
+    const handleLine = (line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      if (trimmed.startsWith(':')) {
+        resetStall();
+        if (!text && !reasoningChars) {
+          onStatus?.({ stage: 'waiting', message: `Queued on ${meta.name} (${model})…` });
+        }
+        return;
+      }
+      if (!trimmed.startsWith('data:')) return;
+      const data = trimmed.slice(5).trim();
+      if (!data || data === '[DONE]') return;
+      let payload;
+      try {
+        payload = JSON.parse(data);
+      } catch {
+        return;
+      }
+      resetStall();
+      if (payload.usage) usage = payload.usage;
+      const choice = payload.choices && payload.choices[0];
+      if (!choice) return;
+      if (choice.finish_reason) finishReason = choice.finish_reason;
+      const delta = choice.delta || {};
+      const reasoningPiece = typeof delta.reasoning_content === 'string'
+        ? delta.reasoning_content
+        : typeof delta.reasoning === 'string' ? delta.reasoning : '';
+      if (reasoningPiece) {
+        reasoningChars += reasoningPiece.length;
+        const now = Date.now();
+        if (!text && (now - lastReasoningNotice >= 350 || reasoningChars === reasoningPiece.length)) {
+          lastReasoningNotice = now;
+          onStatus?.({ stage: 'thinking', reasoningChars, message: `Thinking (${reasoningChars} chars)…` });
+        }
+      }
+      if (typeof delta.content === 'string' && delta.content) {
+        if (waitNoticeTimer) { clearTimeout(waitNoticeTimer); waitNoticeTimer = null; }
+        text += delta.content;
+        onDelta(delta.content);
+      }
+      if (Array.isArray(delta.tool_calls)) {
+        if (waitNoticeTimer) { clearTimeout(waitNoticeTimer); waitNoticeTimer = null; }
+        for (const part of delta.tool_calls) {
+          const index = part.index || 0;
+          const current = calls.get(index) || { id: '', name: '', arguments: '' };
+          if (part.id) current.id = part.id;
+          if (part.function?.name) current.name += part.function.name;
+          if (part.function?.arguments) current.arguments += part.function.arguments;
+          calls.set(index, current);
+        }
+      }
+    };
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        resetStall();
+        buffer += decoder.decode(value, { stream: true });
+        let newline = buffer.indexOf('\n');
+        while (newline >= 0) {
+          handleLine(buffer.slice(0, newline));
+          buffer = buffer.slice(newline + 1);
+          newline = buffer.indexOf('\n');
+        }
+      }
+      if (buffer.trim()) handleLine(buffer);
+    } catch (error) {
+      if (timedOut) {
+        const err = new Error(`${meta.name} (${model}) stalled for ${Math.round(timeoutMs / 1000)}s without sending output. Try switching models.`);
+        err.status = 408;
+        err.noRetry = true;
+        throw err;
+      }
+      if (signal?.aborted) throw new Error('Cancelled.');
+      throw error;
+    }
+
+    const toolCalls = [...calls.values()]
+      .filter((call) => call.name)
+      .map((call) => {
+        let input = {};
+        try {
+          input = call.arguments ? JSON.parse(call.arguments) : {};
+        } catch {
+          input = { raw: call.arguments };
+        }
+        return { id: call.id || `call_${Math.random().toString(36).slice(2)}`, name: call.name, input };
+      });
+
+    return { text, toolCalls, usage, finishReason };
+  } finally {
+    if (stallTimer) clearTimeout(stallTimer);
+    if (waitNoticeTimer) clearTimeout(waitNoticeTimer);
+    if (signal) signal.removeEventListener('abort', onCallerAbort);
+  }
 }
 
-async function testKey(provider, apiKey) {
+async function testKey(provider, apiKey, model = null) {
   const meta = PROVIDERS[provider];
   if (!meta || !meta.baseUrl) throw new Error('This provider does not use a key.');
-  const response = await fetch(meta.baseUrl, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${apiKey}`,
-      ...(provider === 'openrouter' ? { 'HTTP-Referer': 'https://caelix.local', 'X-Title': 'CAELIX' } : {}),
-    },
-    body: JSON.stringify({
-      model: meta.defaultModel,
-      messages: [{ role: 'user', content: 'Reply with the single word ready.' }],
-      max_tokens: 8,
-      stream: false,
-    }),
-  });
-  if (!response.ok) throw await readError(response);
-  return true;
+  const targetModel = model || meta.defaultModel;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const response = await fetch(meta.baseUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${apiKey}`,
+        ...(provider === 'openrouter' ? { 'HTTP-Referer': 'https://caelix.local', 'X-Title': 'CAELIX' } : {}),
+      },
+      body: JSON.stringify({
+        model: targetModel,
+        messages: [{ role: 'user', content: 'Reply with the single word ready.' }],
+        max_tokens: 16,
+        stream: false,
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok) throw await readError(response);
+    return true;
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new Error(`${meta.name} (${targetModel}) timed out after 15s during key test.`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
+
+const MODELS_ENDPOINTS = {
+  openrouter: 'https://openrouter.ai/api/v1/models',
+  nvidia: 'https://integrate.api.nvidia.com/v1/models',
+  groq: 'https://api.groq.com/openai/v1/models',
+};
+
+const MODEL_EXCLUDES = {
+  nvidia: /(embed|rerank|guard|safety|topic-control|nvclip|deplot|parse|synthetic-video|cosmos-reason|reward)/i,
+  groq: /(whisper|orpheus|guard|safeguard|tts|playai)/i,
+};
 
 async function fetchProviderModels(provider, apiKey) {
   const meta = PROVIDERS[provider];
   if (!meta) throw new Error(`Unknown provider: ${provider}`);
   if (meta.keyless) return meta.models;
-  if (provider === 'gemini' && !apiKey) throw new Error(`Add a ${meta.name} key first to refresh models.`);
+  if ((provider === 'gemini' || provider === 'groq') && !apiKey) {
+    throw new Error(`Add a ${meta.name} key first to refresh models.`);
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
@@ -342,9 +466,7 @@ async function fetchProviderModels(provider, apiKey) {
         .filter((id) => id && !id.includes('embedding') && !id.includes('imagen'));
       return ids.length ? [...new Set([...meta.models, ...ids])].slice(0, 120) : meta.models;
     }
-    const url = provider === 'openrouter'
-      ? 'https://openrouter.ai/api/v1/models'
-      : 'https://integrate.api.nvidia.com/v1/models';
+    const url = MODELS_ENDPOINTS[provider];
     const headers = apiKey ? { authorization: `Bearer ${apiKey}` } : {};
     const response = await fetch(url, {
       headers,
@@ -352,10 +474,10 @@ async function fetchProviderModels(provider, apiKey) {
     });
     if (!response.ok) throw await readError(response);
     const data = await response.json();
-    const exclude = /(embed|rerank|guard|safety|topic-control|nvclip|deplot|parse|synthetic-video|cosmos-reason|reward)/i;
+    const exclude = MODEL_EXCLUDES[provider];
     const ids = (data.data || [])
       .map((item) => item.id)
-      .filter((id) => Boolean(id) && (provider !== 'nvidia' || !exclude.test(id)));
+      .filter((id) => Boolean(id) && (!exclude || !exclude.test(id)));
     return ids.length ? [...new Set([...meta.models, ...ids])].slice(0, 400) : meta.models;
   } finally {
     clearTimeout(timer);

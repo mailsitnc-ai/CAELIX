@@ -485,6 +485,7 @@ class Engine {
           messages: conversation,
           tools,
           signal,
+          onStatus: (status) => emit({ type: 'status', ...status }),
           onDelta: (delta) => {
             textOut += delta;
             emitted = true;
@@ -501,7 +502,7 @@ class Engine {
         const retryable = isRateLimit || status === 408 || status >= 500
           || /fetch failed|network|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(error.message);
         const maxAttempts = isRateLimit ? 5 : 2;
-        if (!retryable || emitted || attempt >= maxAttempts) throw error;
+        if (!retryable || error.noRetry || emitted || attempt >= maxAttempts) throw error;
         attempt += 1;
         const fast = process.env.CAELIX_FAST_RETRY === '1';
         const defaultWait = isRateLimit ? Math.min(45_000, 2000 * 2 ** (attempt - 1)) : 600 * 2 ** (attempt - 1);

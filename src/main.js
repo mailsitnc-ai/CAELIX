@@ -409,10 +409,10 @@ function registerIpc() {
     return { provider, masked: null };
   });
 
-  ipcMain.handle('keys:test', async (_event, { provider, key }) => {
+  ipcMain.handle('keys:test', async (_event, { provider, key, model }) => {
     const value = key || keys.get(provider);
     if (!value) throw new Error('Paste a key first.');
-    await testKey(provider, value);
+    await testKey(provider, value, model);
     return { ok: true, message: 'Key accepted.' };
   });
 

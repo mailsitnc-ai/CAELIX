@@ -782,7 +782,8 @@ function renderKeys() {
       $(`#key-test-${provider.id}`).addEventListener('click', async () => {
         hint.textContent = 'Testing…';
         try {
-          await api.invoke('keys:test', { provider: provider.id, key: input.value.trim() || undefined });
+          const model = state.session?.provider === provider.id ? state.session.model : undefined;
+          await api.invoke('keys:test', { provider: provider.id, key: input.value.trim() || undefined, model });
           hint.textContent = 'Key accepted. It can reach the model.';
         } catch (error) {
           hint.textContent = error.message;
@@ -1012,7 +1013,7 @@ function appendError(message) {
   const msg = document.createElement('div');
   msg.textContent = message;
   card.appendChild(msg);
-  if (/401|403|key|billing|free tier|quota|permission_denied/i.test(message)) {
+  if (/401|403|404|408|key|billing|free tier|quota|permission_denied|not found for account|did not respond|timed out|stalled/i.test(message)) {
     const actions = document.createElement('div');
     actions.className = 'error-actions';
     actions.innerHTML = '<button type="button" data-err-action="keys">Open Keys</button><button type="button" data-err-action="model">Switch Model</button>';
@@ -1050,6 +1051,14 @@ function onChatEvent(event) {
       setStreaming(true);
       ensureLiveAssistant();
       break;
+    case 'status': {
+      ensureLiveAssistant();
+      if (!state.liveText && state.currentAssistant.md.querySelector('.typing')) {
+        state.currentAssistant.md.innerHTML = `<span class="typing"><i></i><i></i><i></i></span><span class="stream-note">${escapeHtml(event.message || '')}</span>`;
+      }
+      if (event.message) $('#stream-status').textContent = event.message;
+      break;
+    }
     case 'text': {
       clearRetryBanner();
       if (!state.firstWordAt) state.firstWordAt = performance.now();
