@@ -35,12 +35,44 @@ const PROVIDERS = {
     consoleUrl: 'https://build.nvidia.com/',
     baseUrl: 'https://integrate.api.nvidia.com/v1/chat/completions',
     models: [
-      'meta/llama-3.3-70b-instruct',
+      'deepseek-ai/deepseek-v4.1-flash',
+      'nvidia/nemotron-3-super-120b-a12b',
+      'nvidia/nemotron-3-ultra-550b-a55b',
+      'nvidia/nemotron-3.5-super-vl-120b-a12b',
+      'nvidia/nemotron-3.5-lightning-30b-a3b',
+      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+      'nvidia/nemotron-nano-3-30b-a3b',
+      'nvidia/llama-3.1-nemotron-ultra-253b-v1',
       'nvidia/llama-3.1-nemotron-70b-instruct',
-      'deepseek-ai/deepseek-r1',
-      'qwen/qwen2.5-coder-32b-instruct',
+      'nvidia/llama-3.1-nemotron-51b-instruct',
+      'nvidia/nemotron-4-340b-instruct',
+      'mistralai/mistral-large-4-1t-a52b',
+      'mistralai/mistral-large-2-instruct',
+      'mistralai/codestral-22b-instruct-v0.1',
+      'mistralai/mistral-7b-instruct-v0.3',
+      'mistralai/mixtral-8x22b-v0.1',
+      'nv-mistralai/mistral-nemo-12b-instruct',
+      'moonshotai/kimi-k2.6',
+      'z-ai/glm-5.3-flash',
+      'minimaxai/minimax-m3.1-flash',
+      'stepfun-ai/step-5-preview',
+      'openai/gpt-oss-20b',
+      'google/gemma-4-31b-it',
+      'google/gemma-3-12b-it',
+      'google/gemma-3-4b-it',
+      'meta/llama-3.2-90b-vision-instruct',
+      'meta/codellama-70b',
+      'poolside/laguna-xs-2.1',
+      '01-ai/yi-large',
+      'microsoft/phi-3.5-moe-instruct',
+      'microsoft/phi-3-vision-128k-instruct',
+      'ibm/granite-34b-code-instruct',
+      'ibm/granite-3.0-8b-instruct',
+      'bigcode/starcoder2-15b',
+      'databricks/dbrx-instruct',
+      'ai21labs/jamba-1.5-large-instruct',
     ],
-    defaultModel: 'meta/llama-3.3-70b-instruct',
+    defaultModel: 'deepseek-ai/deepseek-v4.1-flash',
     color: '#76b900',
   },
   claude: {
@@ -133,6 +165,16 @@ function toolSchema(tools) {
   }));
 }
 
+function parseRetryAfterMs(response) {
+  const raw = response.headers?.get?.('retry-after');
+  if (!raw) return null;
+  const secs = Number(raw);
+  if (Number.isFinite(secs) && secs >= 0) return Math.min(120_000, Math.round(secs * 1000));
+  const at = Date.parse(raw);
+  if (Number.isFinite(at)) return Math.min(120_000, Math.max(500, at - Date.now()));
+  return null;
+}
+
 async function readError(response) {
   let body = '';
   try {
@@ -143,11 +185,15 @@ async function readError(response) {
   let detail = body.slice(0, 500);
   try {
     const parsed = JSON.parse(body);
-    detail = parsed.error?.message || parsed.message || detail;
+    const first = Array.isArray(parsed) ? parsed[0] : parsed;
+    detail = first?.error?.message || first?.message || first?.detail || parsed?.detail || detail;
   } catch {
     // keep raw body
   }
-  return `Provider returned ${response.status}${detail ? `: ${detail}` : ''}`;
+  const err = new Error(`Provider returned ${response.status}${detail ? `: ${detail}` : ''}`);
+  err.status = response.status;
+  err.retryAfterMs = parseRetryAfterMs(response);
+  return err;
 }
 
 async function streamOpenAICompatible(options) {
@@ -183,7 +229,7 @@ async function streamOpenAICompatible(options) {
     body: JSON.stringify(body),
     signal,
   });
-  if (!response.ok) throw new Error(await readError(response));
+  if (!response.ok) throw await readError(response);
   if (!response.body) throw new Error('The provider returned no response stream.');
 
   const reader = response.body.getReader();
@@ -271,7 +317,7 @@ async function testKey(provider, apiKey) {
       stream: false,
     }),
   });
-  if (!response.ok) throw new Error(await readError(response));
+  if (!response.ok) throw await readError(response);
   return true;
 }
 
@@ -279,7 +325,7 @@ async function fetchProviderModels(provider, apiKey) {
   const meta = PROVIDERS[provider];
   if (!meta) throw new Error(`Unknown provider: ${provider}`);
   if (meta.keyless) return meta.models;
-  if (!apiKey) throw new Error(`Add a ${meta.name} key first to refresh models.`);
+  if (provider === 'gemini' && !apiKey) throw new Error(`Add a ${meta.name} key first to refresh models.`);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
@@ -288,25 +334,29 @@ async function fetchProviderModels(provider, apiKey) {
         headers: { 'x-goog-api-key': apiKey },
         signal: controller.signal,
       });
-      if (!response.ok) throw new Error(await readError(response));
+      if (!response.ok) throw await readError(response);
       const data = await response.json();
       const ids = (data.models || [])
         .filter((item) => Array.isArray(item.supportedGenerationMethods) && item.supportedGenerationMethods.includes('generateContent'))
         .map((item) => String(item.name || '').replace(/^models\//, ''))
         .filter((id) => id && !id.includes('embedding') && !id.includes('imagen'));
-      return ids.length ? [...new Set([...meta.models, ...ids])].slice(0, 60) : meta.models;
+      return ids.length ? [...new Set([...meta.models, ...ids])].slice(0, 120) : meta.models;
     }
     const url = provider === 'openrouter'
       ? 'https://openrouter.ai/api/v1/models'
       : 'https://integrate.api.nvidia.com/v1/models';
+    const headers = apiKey ? { authorization: `Bearer ${apiKey}` } : {};
     const response = await fetch(url, {
-      headers: { authorization: `Bearer ${apiKey}` },
+      headers,
       signal: controller.signal,
     });
-    if (!response.ok) throw new Error(await readError(response));
+    if (!response.ok) throw await readError(response);
     const data = await response.json();
-    const ids = (data.data || []).map((item) => item.id).filter(Boolean);
-    return ids.length ? [...new Set([...meta.models, ...ids])].slice(0, 80) : meta.models;
+    const exclude = /(embed|rerank|guard|safety|topic-control|nvclip|deplot|parse|synthetic-video|cosmos-reason|reward)/i;
+    const ids = (data.data || [])
+      .map((item) => item.id)
+      .filter((id) => Boolean(id) && (provider !== 'nvidia' || !exclude.test(id)));
+    return ids.length ? [...new Set([...meta.models, ...ids])].slice(0, 400) : meta.models;
   } finally {
     clearTimeout(timer);
   }

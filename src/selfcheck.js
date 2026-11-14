@@ -497,6 +497,72 @@ async function run(context) {
       return 'bypass write to .git asked first and was refused';
     });
 
+    await step('mcp, hooks, slash commands, helper agent and nvidia catalog', async () => {
+      const nvidiaModels = await evaluate('window.__caelixState.providers.find(p => p.id === "nvidia")?.models?.length || 0');
+      if (nvidiaModels < 30) throw new Error(`Expected >= 30 NVIDIA models, got ${nvidiaModels}`);
+
+      // Slash commands menu + /help + /btw + /compact
+      await setValue('#prompt', '/');
+      await waitFor('!document.querySelector("#command-menu").classList.contains("hidden")', 3000, 'slash command menu');
+      await setValue('#prompt', '/help');
+      await click('#send-btn');
+      await waitFor('document.querySelectorAll(".btw-card").length >= 1', 3000, '/help inline card');
+
+      const msgCountBeforeBtw = await evaluate('window.__caelixState.session.messages.length');
+      await setValue('#prompt', '/btw What folder is active?');
+      await click('#send-btn');
+      await waitFor('document.querySelectorAll(".btw-card").length >= 2', 4000, '/btw inline card');
+      const msgCountAfterBtw = await evaluate('window.__caelixState.session.messages.length');
+      if (msgCountAfterBtw !== msgCountBeforeBtw) throw new Error('/btw modified saved chat history.');
+
+      await setValue('#prompt', '/compact');
+      await click('#send-btn');
+      await waitFor('document.querySelector("#transcript").textContent.includes("Compacted context")', 4000, '/compact result card');
+
+      // Helper Agent modal -> run read-only helper task
+      await click('#helper-btn');
+      await waitFor('window.__caelixState.helperOpen === true', 3000, 'helper modal');
+      await setValue('#helper-task', 'Inspect workspace files');
+      await click('#helper-run');
+      await waitFor('document.querySelectorAll(".helper-card").length >= 1', 6000, 'helper agent card rendered');
+      await waitFor('window.__caelixState.streaming === false', 8000, 'helper turn complete');
+
+      // MCP Server modal: add tiny stdio script, verify connected tool, then remove
+      const mockMcp = path.join(workspace, 'mock-mcp.sh');
+      fs.writeFileSync(mockMcp, [
+        '#!/bin/sh',
+        'while IFS= read -r line; do',
+        '  id=$(echo "$line" | sed -n "s/.*\\"id\\":\\([0-9]*\\).*/\\1/p")',
+        '  case "$line" in',
+        '    *initialize*) echo "{\\"jsonrpc\\":\\"2.0\\",\\"id\\":$id,\\"result\\":{\\"protocolVersion\\":\\"2024-11-05\\",\\"capabilities\\":{},\\"serverInfo\\":{\\"name\\":\\"mock\\",\\"version\\":\\"1.0\\"}}}" ;;',
+        '    *tools/list*) echo "{\\"jsonrpc\\":\\"2.0\\",\\"id\\":$id,\\"result\\":{\\"tools\\":[{\\"name\\":\\"ping\\",\\"description\\":\\"Ping test\\",\\"inputSchema\\":{\\"type\\":\\"object\\",\\"properties\\":{}}}]}}" ;;',
+        '  esac',
+        'done',
+      ].join('\n'), { mode: 0o755 });
+      await click('#mcp-btn');
+      await waitFor('window.__caelixState.mcpOpen === true', 3000, 'mcp modal');
+      await setValue('#mcp-name', 'mockping');
+      await setValue('#mcp-command', mockMcp);
+      await click('#mcp-add');
+      await waitFor('document.querySelector("#mcp-list").textContent.includes("1 tool(s)")', 8000, 'mcp connected with 1 tool');
+      await click('#mcp-list .mcp-remove');
+      await waitFor('!document.querySelector("#mcp-list").textContent.includes("mockping")', 4000, 'mcp removed');
+      await click('#mcp-close');
+      fs.rmSync(mockMcp, { force: true });
+
+      // Hooks modal: add, toggle, remove
+      await click('#hooks-btn');
+      await waitFor('window.__caelixState.hooksOpen === true', 3000, 'hooks modal');
+      await setValue('#hook-command', 'echo hook-ok');
+      await click('#hook-add');
+      await waitFor('document.querySelector("#hooks-list").textContent.includes("echo hook-ok")', 4000, 'hook saved');
+      await click('#hooks-list .hook-remove');
+      await waitFor('!document.querySelector("#hooks-list").textContent.includes("echo hook-ok")', 4000, 'hook removed');
+      await click('#hooks-close');
+      await snap('mcp hooks helper commands');
+      return `${nvidiaModels} NVIDIA models; MCP, Hooks, Slash commands & Helper Agent verified`;
+    });
+
     await step('delete a chat inline', async () => {
       const initialCount = await evaluate('document.querySelectorAll(".session-item").length');
       const prevActiveId = await evaluate('window.__caelixState.activeId');

@@ -47,6 +47,12 @@ const state = {
   mentionQuery: null,
   mentionMatches: [],
   mentionIndex: 0,
+  commandMatches: [],
+  commandIndex: 0,
+  mcpOpen: false,
+  hooksOpen: false,
+  helperOpen: false,
+  retryBanner: null,
   lastUsageText: '',
   promptOpen: false,
 };
@@ -763,6 +769,12 @@ function renderKeys() {
           input.value = '';
           hint.textContent = 'Saved, encrypted by macOS.';
           await refreshKeys();
+          api.invoke('providers:refresh', { provider: provider.id })
+            .then((res) => {
+              const target = state.providers.find((item) => item.id === provider.id);
+              if (target && Array.isArray(res?.models)) target.models = res.models;
+            })
+            .catch(() => {});
         } catch (error) {
           hint.textContent = error.message;
         }
@@ -983,12 +995,50 @@ function appendPlan(event) {
   scrollToBottom();
 }
 
-function appendError(message) {  const card = document.createElement('div');
+function clearRetryBanner() {
+  if (state.retryBanner) {
+    state.retryBanner.remove();
+    state.retryBanner = null;
+  }
+}
+
+function appendError(message) {
+  clearRetryBanner();
+  if (state.currentAssistant && !state.liveText) {
+    state.currentAssistant.md.innerHTML = '';
+  }
+  const card = document.createElement('div');
   card.className = 'error-card';
-  card.textContent = message;
+  const msg = document.createElement('div');
+  msg.textContent = message;
+  card.appendChild(msg);
+  if (/401|403|key|billing|free tier|quota|permission_denied/i.test(message)) {
+    const actions = document.createElement('div');
+    actions.className = 'error-actions';
+    actions.innerHTML = '<button type="button" data-err-action="keys">Open Keys</button><button type="button" data-err-action="model">Switch Model</button>';
+    actions.querySelector('[data-err-action="keys"]').addEventListener('click', openKeys);
+    actions.querySelector('[data-err-action="model"]').addEventListener('click', (event) => {
+      event.stopPropagation();
+      const menu = $('#model-menu');
+      menu.classList.remove('hidden');
+      renderModelMenu();
+    });
+    card.appendChild(actions);
+  }
   if (state.currentAssistant) state.currentAssistant.body.appendChild(card);
   else $('#transcript').appendChild(card);
   scrollToBottom();
+}
+
+function appendInlineNote(title, markdown) {
+  const card = document.createElement('div');
+  card.className = 'btw-card';
+  card.innerHTML = `
+    <div class="btw-head"><span>${escapeHtml(title)}</span><button type="button" class="btw-close" title="Dismiss" aria-label="Dismiss">×</button></div>
+    <div class="md">${renderMarkdown(markdown)}</div>`;
+  card.querySelector('.btw-close').addEventListener('click', () => card.remove());
+  $('#transcript').appendChild(card);
+  scrollToBottom(true);
 }
 
 function onChatEvent(event) {
@@ -996,10 +1046,12 @@ function onChatEvent(event) {
     case 'turn-start':
       state.sendStartedAt = performance.now();
       state.firstWordAt = null;
+      clearRetryBanner();
       setStreaming(true);
       ensureLiveAssistant();
       break;
     case 'text': {
+      clearRetryBanner();
       if (!state.firstWordAt) state.firstWordAt = performance.now();
       if (state.currentAssistant?.hasTools) {
         if (state.liveRaf) {
@@ -1016,6 +1068,7 @@ function onChatEvent(event) {
       break;
     }
     case 'tool-start': {
+      clearRetryBanner();
       ensureLiveAssistant();
       state.currentAssistant.hasTools = true;
       if (state.currentAssistant.md.querySelector('.typing')) {
@@ -1031,6 +1084,58 @@ function onChatEvent(event) {
     case 'tool-result':
       updateToolCard(event.id, event);
       break;
+    case 'subagent-start': {
+      ensureLiveAssistant();
+      state.currentAssistant.hasTools = true;
+      if (state.currentAssistant.md.querySelector('.typing')) {
+        state.currentAssistant.md.innerHTML = renderMarkdown(state.liveText);
+      }
+      const card = document.createElement('div');
+      card.className = 'helper-card';
+      card.id = `helper-${event.id}`;
+      card.innerHTML = `
+        <div class="helper-head"><span>Helper Agent</span><span>${escapeHtml(String(event.task || '').slice(0, 120))}</span></div>
+        <div class="helper-steps">Running read-only investigation…</div>`;
+      state.currentAssistant.body.appendChild(card);
+      scrollToBottom();
+      break;
+    }
+    case 'subagent-event': {
+      const card = document.getElementById(`helper-${event.parentId}`);
+      if (!card) break;
+      const steps = card.querySelector('.helper-steps');
+      const label = event.tool ? `${event.tool}${event.target ? ` · ${event.target}` : ''}` : event.type;
+      if (label) {
+        const line = document.createElement('div');
+        line.textContent = `· ${label}`;
+        if (steps.textContent === 'Running read-only investigation…') steps.textContent = '';
+        steps.appendChild(line);
+      }
+      break;
+    }
+    case 'subagent-end': {
+      const card = document.getElementById(`helper-${event.id}`);
+      if (!card) break;
+      const steps = card.querySelector('.helper-steps');
+      if (steps && steps.textContent === 'Running read-only investigation…') {
+        steps.textContent = 'Completed read-only investigation';
+      }
+      const md = document.createElement('div');
+      md.className = 'md';
+      md.innerHTML = renderMarkdown(String(event.summary || 'Helper finished.').slice(0, 1200));
+      card.appendChild(md);
+      scrollToBottom();
+      break;
+    }
+    case 'hook-event': {
+      if (!state.currentAssistant) break;
+      const note = document.createElement('div');
+      note.className = `hook-note${event.blocked ? ' blocked' : ''}`;
+      note.textContent = `Hook ${event.event}${event.tool ? ` (${event.tool})` : ''}${event.blocked ? ' BLOCKED' : ''}: ${String(event.output || '').slice(0, 200)}`;
+      state.currentAssistant.body.appendChild(note);
+      scrollToBottom();
+      break;
+    }
     case 'permission-request':
       appendPermission(event);
       break;
@@ -1040,9 +1145,23 @@ function onChatEvent(event) {
     case 'plan':
       appendPlan(event);
       break;
-    case 'retry':
-      toast(`Provider error. Retrying (${event.attempt}) in ${Math.round((event.waitMs || 0) / 100) / 10}s.`);
+    case 'retry': {
+      ensureLiveAssistant();
+      if (!state.liveText && state.currentAssistant.md.querySelector('.typing')) {
+        state.currentAssistant.md.innerHTML = '';
+      }
+      if (!state.retryBanner) {
+        state.retryBanner = document.createElement('div');
+        state.retryBanner.className = 'retry-banner';
+        state.currentAssistant.body.appendChild(state.retryBanner);
+      }
+      const secs = Math.max(1, Math.ceil((event.remainingMs ?? event.waitMs ?? 1000) / 1000));
+      const total = event.maxAttempts || 5;
+      state.retryBanner.textContent = `${event.reason || 'Rate limit / provider error'}. Waiting ${secs}s before retry ${event.attempt}/${total}…`;
+      $('#stream-status').textContent = `Retry ${event.attempt}/${total} in ${secs}s`;
+      scrollToBottom();
       break;
+    }
     case 'change':
       state.changes.push(event);
       renderChanges();
@@ -1125,15 +1244,220 @@ function onChatEvent(event) {
   }
 }
 
+const SLASH_COMMANDS = [
+  { name: '/compact', args: '[focus]', desc: 'Summarize older messages to save context tokens' },
+  { name: '/btw', args: '<question>', desc: 'Ask an ephemeral side question without saving to history' },
+  { name: '/helper', args: '<task>', desc: 'Run the read-only Helper Agent on a focused task' },
+  { name: '/agent', args: '<task>', desc: 'Alias for /helper' },
+  { name: '/mcp', args: '', desc: 'Manage stdio or HTTP MCP servers' },
+  { name: '/hooks', args: '', desc: 'Manage PreToolUse, PostToolUse, UserPromptSubmit & Stop hooks' },
+  { name: '/memory', args: '', desc: 'Open Project memory (CAELIX.md / AGENTS.md)' },
+  { name: '/keys', args: '', desc: 'Open API Keys manager' },
+  { name: '/model', args: '[id]', desc: 'Switch active model or open Model picker' },
+  { name: '/mode', args: '[ask|accept|plan|bypass]', desc: 'Switch permission mode' },
+  { name: '/context', args: '', desc: 'Inspect context window breakdown' },
+  { name: '/cost', args: '', desc: 'Show session token & status summary' },
+  { name: '/usage', args: '', desc: 'Alias for /cost' },
+  { name: '/status', args: '', desc: 'Show session, provider, MCP & hook status' },
+  { name: '/review', args: '', desc: 'Ask CAELIX to review recent project changes' },
+  { name: '/export', args: '', desc: 'Save chat transcript as Markdown' },
+  { name: '/clear', args: '', desc: 'Start a fresh chat' },
+  { name: '/help', args: '', desc: 'List available slash commands' },
+];
+
+function hideCommands() {
+  state.commandMatches = [];
+  $('#command-menu')?.classList.add('hidden');
+}
+
+function updateCommands() {
+  const prompt = $('#prompt');
+  const menu = $('#command-menu');
+  if (!prompt || !menu) return;
+  const val = prompt.value;
+  if (!val.startsWith('/') || /\s/.test(val.slice(1))) {
+    hideCommands();
+    return;
+  }
+  const q = val.slice(1).toLowerCase();
+  const matches = SLASH_COMMANDS.filter((c) => c.name.slice(1).includes(q));
+  if (!matches.length) {
+    hideCommands();
+    return;
+  }
+  state.commandMatches = matches;
+  state.commandIndex = 0;
+  menu.innerHTML = matches.map((c, idx) => `
+    <button type="button" class="cmd-item${idx === 0 ? ' active' : ''}" data-cmd="${escapeHtml(c.name)}">
+      <span class="cmd-name">${escapeHtml(c.name)}</span>
+      <span class="cmd-desc">${escapeHtml(c.args ? `${c.args} · ` : '')}${escapeHtml(c.desc)}</span>
+    </button>`).join('');
+  menu.classList.remove('hidden');
+  for (const item of $$('.cmd-item', menu)) {
+    item.addEventListener('click', () => selectCommand(item.dataset.cmd));
+  }
+}
+
+function selectCommand(cmdName) {
+  const prompt = $('#prompt');
+  const def = SLASH_COMMANDS.find((c) => c.name === cmdName);
+  hideCommands();
+  if (!def || !def.args) {
+    prompt.value = cmdName;
+    sendMessage();
+    return;
+  }
+  prompt.value = `${cmdName} `;
+  resizePrompt();
+  prompt.focus();
+}
+
+async function runSlashCommand(raw) {
+  const trimmed = raw.trim();
+  const space = trimmed.indexOf(' ');
+  const cmd = (space >= 0 ? trimmed.slice(0, space) : trimmed).toLowerCase();
+  const arg = space >= 0 ? trimmed.slice(space + 1).trim() : '';
+
+  switch (cmd) {
+    case '/help': {
+      const list = SLASH_COMMANDS.map((c) => `- \`${c.name}${c.args ? ` ${c.args}` : ''}\` — ${c.desc}`).join('\n');
+      appendInlineNote('Slash commands', list);
+      return true;
+    }
+    case '/mcp':
+      await openMcp();
+      return true;
+    case '/hooks':
+      await openHooks();
+      return true;
+    case '/memory':
+      await openMemory();
+      return true;
+    case '/keys':
+      openKeys();
+      return true;
+    case '/clear':
+    case '/new':
+      await newChat();
+      toast('Started a fresh chat.');
+      return true;
+    case '/context':
+      $('#app').classList.remove('panel-collapsed');
+      document.querySelector('.panel-tab[data-tab="context"]')?.click();
+      if (state.contextReport) {
+        appendInlineNote('Context usage', `**${state.contextReport.total.toLocaleString()}** / ${state.contextReport.limit.toLocaleString()} tokens (${state.contextReport.percent}%) across **${state.contextReport.messages}** message(s).`);
+      }
+      return true;
+    case '/cost':
+    case '/usage':
+    case '/status': {
+      const report = state.contextReport || await api.invoke('context:get', { sessionId: state.session.id }).catch(() => null);
+      const mcpCount = await api.invoke('mcp:list', { cwd: state.project }).then((r) => r.filter((s) => s.connected).length).catch(() => 0);
+      const hooksCount = await api.invoke('hooks:list', { cwd: state.project }).then((h) => h.filter((i) => i.enabled).length).catch(() => 0);
+      const summary = [
+        `- **Project:** \`${state.project}\``,
+        `- **Provider / Model:** \`${state.session.provider}\` / \`${state.session.model}\``,
+        `- **Mode:** \`${state.session.mode}\``,
+        report ? `- **Context:** ${report.total.toLocaleString()} tokens (${report.percent}% · ${report.messages} messages)` : '',
+        `- **MCP connected:** ${mcpCount} · **Hooks active:** ${hooksCount}`,
+        state.lastUsageText ? `- **Last turn:** ${state.lastUsageText}` : '',
+      ].filter(Boolean).join('\n');
+      appendInlineNote('Session status & usage', summary);
+      return true;
+    }
+    case '/mode': {
+      const alias = { manual: 'ask', ask: 'ask', accept: 'accept', 'accept-edits': 'accept', plan: 'plan', bypass: 'bypass' }[arg.toLowerCase()];
+      if (alias) {
+        await api.invoke('sessions:update', { id: state.session.id, mode: alias });
+        state.session.mode = alias;
+        renderChips();
+        toast(`Mode switched to ${alias}.`);
+      } else {
+        const menu = $('#mode-menu');
+        menu.classList.remove('hidden');
+        renderModeMenu();
+      }
+      return true;
+    }
+    case '/model': {
+      if (arg) {
+        await chooseModel(state.session.provider, arg);
+        toast(`Model switched to ${arg}.`);
+      } else {
+        const menu = $('#model-menu');
+        menu.classList.remove('hidden');
+        renderModelMenu();
+      }
+      return true;
+    }
+    case '/compact': {
+      toast('Compacting conversation…');
+      const res = await api.invoke('chat:compact', { sessionId: state.session.id, focus: arg });
+      state.session = await api.invoke('sessions:get', state.session.id);
+      state.contextReport = await api.invoke('context:get', { sessionId: state.session.id }).catch(() => null);
+      renderAll();
+      appendInlineNote('Compacted context', `Compacted **${res.compactedCount}** older message(s) (${res.beforeTokens.toLocaleString()} → ${res.afterTokens.toLocaleString()} tokens).\n\n${res.summary}`);
+      return true;
+    }
+    case '/btw': {
+      if (!arg) {
+        toast('Type a question after /btw');
+        return true;
+      }
+      toast('Asking /btw side note…');
+      const res = await api.invoke('chat:btw', { sessionId: state.session.id, question: arg });
+      appendInlineNote(`/btw — ${res.question}`, res.answer);
+      return true;
+    }
+    case '/helper':
+    case '/agent': {
+      if (!arg) {
+        openHelper();
+        return true;
+      }
+      await api.invoke('chat:helper', { sessionId: state.session.id, task: arg });
+      return true;
+    }
+    case '/export': {
+      const res = await api.invoke('chat:export', { sessionId: state.session.id });
+      if (!res.canceled) toast(`Exported to ${res.filePath}`);
+      return true;
+    }
+    case '/review':
+      $('#prompt').value = 'Review recent changes in this workspace cleanly. Check for bugs, security risks, edge cases, and missing checks.';
+      return false;
+    default:
+      appendInlineNote('Unknown command', `Unrecognized command \`${cmd}\`. Type \`/help\` to list available commands.`);
+      return true;
+  }
+}
+
 async function sendMessage() {
   const prompt = $('#prompt');
   const text = prompt.value.trim();
   const attachments = state.attachments.slice();
   if ((!text && !attachments.length) || state.streaming || !state.session) return;
+  if (text.startsWith('/') && !attachments.length) {
+    hideCommands();
+    hideMentions();
+    try {
+      const handled = await runSlashCommand(text);
+      if (handled) {
+        prompt.value = '';
+        resizePrompt();
+        return;
+      }
+    } catch (error) {
+      appendError(error.message);
+      return;
+    }
+  }
+  const finalPrompt = $('#prompt').value.trim();
   if ($('#send-btn').disabled) {
     openKeys();
     return;
   }
+  hideCommands();
   hideMentions();
   prompt.value = '';
   state.attachments = [];
@@ -1144,7 +1468,7 @@ async function sendMessage() {
   state.liveText = '';
   state.currentAssistant = null;
   state.session.messages = state.session.messages || [];
-  state.session.messages.push({ role: 'user', content: text, attachments });
+  state.session.messages.push({ role: 'user', content: finalPrompt, attachments });
   const current = $('#transcript');
   if ($('.empty-state', current)) current.innerHTML = '';
   const node = document.createElement('div');
@@ -1152,13 +1476,13 @@ async function sendMessage() {
   const atts = attachments.length
     ? `<div class="msg-attachments">${attachments.map((att) => `<span class="msg-att">${escapeHtml(att.name)}</span>`).join('')}</div>`
     : '';
-  node.innerHTML = `<div class="bubble">${atts}${escapeHtml(text)}</div>`;
+  node.innerHTML = `<div class="bubble">${atts}${escapeHtml(finalPrompt)}</div>`;
   current.appendChild(node);
   scrollToBottom(true);
   setStreaming(true);
   ensureLiveAssistant();
   try {
-    await api.invoke('chat:send', { sessionId: state.session.id, text, attachments });
+    await api.invoke('chat:send', { sessionId: state.session.id, text: finalPrompt, attachments });
   } catch (error) {
     setStreaming(false);
     appendError(error.message);
@@ -1173,6 +1497,122 @@ function openKeys() {
 function closeKeys() {
   state.keysOpen = false;
   $('#keys-screen').classList.add('hidden');
+}
+
+function renderMcpRows(servers = []) {
+  const list = $('#mcp-list');
+  if (!servers.length) {
+    list.innerHTML = '<div class="config-empty">No MCP servers configured yet. Add a stdio command or HTTP endpoint below.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  for (const s of servers) {
+    const row = document.createElement('div');
+    row.className = 'config-item';
+    const badgeClass = s.connected ? 'ok' : s.error ? 'err' : '';
+    const badgeText = s.connected ? `${s.tools.length} tool(s)` : s.enabled ? (s.error ? 'Error' : 'Disconnected') : 'Disabled';
+    const target = s.url || [s.command, ...(s.args || [])].join(' ');
+    row.innerHTML = `
+      <div class="config-item-head">
+        <strong>${escapeHtml(s.name)}</strong>
+        <span class="config-badge">${escapeHtml(s.scope)}</span>
+        <span class="config-badge ${badgeClass}">${escapeHtml(badgeText)}</span>
+        <div class="config-actions">
+          <button type="button" class="mcp-toggle">${s.enabled ? 'Disable' : 'Enable'}</button>
+          <button type="button" class="mcp-remove">Remove</button>
+        </div>
+      </div>
+      <div class="config-detail">${escapeHtml(s.error || target)}</div>`;
+    row.querySelector('.mcp-toggle').addEventListener('click', async () => {
+      const updated = await api.invoke('mcp:toggle', { name: s.name, scope: s.scope, cwd: state.project, enabled: !s.enabled });
+      renderMcpRows(updated);
+    });
+    row.querySelector('.mcp-remove').addEventListener('click', async () => {
+      const updated = await api.invoke('mcp:remove', { name: s.name, scope: s.scope, cwd: state.project });
+      renderMcpRows(updated);
+      toast(`Removed MCP server ${s.name}.`);
+    });
+    list.appendChild(row);
+  }
+}
+
+async function openMcp() {
+  state.mcpOpen = true;
+  $('#mcp-screen').classList.remove('hidden');
+  $('#mcp-list').innerHTML = '<div class="config-empty">Checking MCP servers…</div>';
+  try {
+    const servers = await api.invoke('mcp:list', { cwd: state.project });
+    renderMcpRows(servers);
+  } catch (error) {
+    $('#mcp-list').innerHTML = `<div class="config-empty">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function closeMcp() {
+  state.mcpOpen = false;
+  $('#mcp-screen').classList.add('hidden');
+}
+
+function renderHookRows(items = []) {
+  const list = $('#hooks-list');
+  if (!items.length) {
+    list.innerHTML = '<div class="config-empty">No hooks configured yet. Add one below (exit code 2 blocks tools/prompts).</div>';
+    return;
+  }
+  list.innerHTML = '';
+  for (const h of items) {
+    const row = document.createElement('div');
+    row.className = 'config-item';
+    row.innerHTML = `
+      <div class="config-item-head">
+        <strong>${escapeHtml(h.event)}</strong>
+        <span class="config-badge">${escapeHtml(h.matcher || '*')}</span>
+        <span class="config-badge">${escapeHtml(h.scope)}</span>
+        <span class="config-badge ${h.enabled ? 'ok' : ''}">${h.enabled ? 'Enabled' : 'Disabled'}</span>
+        <div class="config-actions">
+          <button type="button" class="hook-toggle">${h.enabled ? 'Disable' : 'Enable'}</button>
+          <button type="button" class="hook-remove">Remove</button>
+        </div>
+      </div>
+      <div class="config-detail">${escapeHtml(h.command)}</div>`;
+    row.querySelector('.hook-toggle').addEventListener('click', async () => {
+      const updated = await api.invoke('hooks:toggle', { id: h.id, scope: h.scope, cwd: state.project, enabled: !h.enabled });
+      renderHookRows(updated);
+    });
+    row.querySelector('.hook-remove').addEventListener('click', async () => {
+      const updated = await api.invoke('hooks:remove', { id: h.id, scope: h.scope, cwd: state.project });
+      renderHookRows(updated);
+      toast('Hook removed.');
+    });
+    list.appendChild(row);
+  }
+}
+
+async function openHooks() {
+  state.hooksOpen = true;
+  $('#hooks-screen').classList.remove('hidden');
+  try {
+    const items = await api.invoke('hooks:list', { cwd: state.project });
+    renderHookRows(items);
+  } catch (error) {
+    $('#hooks-list').innerHTML = `<div class="config-empty">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function closeHooks() {
+  state.hooksOpen = false;
+  $('#hooks-screen').classList.add('hidden');
+}
+
+function openHelper() {
+  state.helperOpen = true;
+  $('#helper-screen').classList.remove('hidden');
+  $('#helper-task')?.focus();
+}
+
+function closeHelper() {
+  state.helperOpen = false;
+  $('#helper-screen').classList.add('hidden');
 }
 
 async function refreshMemory() {
@@ -1236,14 +1676,31 @@ async function saveMemory() {
   }
 }
 
+function syncProviderCatalogs(onlyPid = null) {
+  const targets = onlyPid
+    ? [onlyPid, ...(onlyPid !== 'nvidia' ? ['nvidia'] : [])]
+    : state.providers.filter((p) => !p.keyless && (p.id === 'nvidia' || state.keys.some((k) => k.id === p.id && k.configured))).map((p) => p.id);
+  return Promise.allSettled(targets.map(async (pid) => {
+    const res = await api.invoke('providers:refresh', { provider: pid });
+    const target = state.providers.find((item) => item.id === pid);
+    if (target && Array.isArray(res?.models) && res.models.length) target.models = res.models;
+  }));
+}
+
 function renderModelMenu(filter = '') {
   const menu = $('#model-menu');
+  if (!state.modelsAutoSynced && !state.info?.selfcheck) {
+    state.modelsAutoSynced = true;
+    syncProviderCatalogs().then(() => {
+      if (!menu.classList.contains('hidden')) renderModelMenu($('#model-search')?.value || '');
+    }).catch(() => {});
+  }
   const query = filter.trim().toLowerCase();
-  const chunks = [`<div class="pop-head-row"><input class="pop-search" id="model-search" placeholder="Search models" value="${escapeHtml(filter)}"><button id="model-refresh" class="pop-refresh" type="button" title="Refresh models from current provider">Refresh</button></div>`];
+  const chunks = [`<div class="pop-head-row"><input class="pop-search" id="model-search" placeholder="Search models" value="${escapeHtml(filter)}"><button id="model-refresh" class="pop-refresh" type="button" title="Refresh live model catalog">Refresh</button></div>`];
   for (const provider of state.providers) {
     const models = provider.models.filter((model) => !query || model.toLowerCase().includes(query) || provider.name.toLowerCase().includes(query));
     if (!models.length) continue;
-    chunks.push(`<div class="pop-section">${escapeHtml(provider.name)}</div>`);
+    chunks.push(`<div class="pop-section">${escapeHtml(provider.name)} (${models.length})</div>`);
     for (const model of models) {
       const active = state.session && state.session.provider === provider.id && state.session.model === model;
       chunks.push(`<button class="pop-item${active ? ' active' : ''}" data-provider="${provider.id}" data-model="${escapeHtml(model)}"><span class="pop-dot" style="background:${provider.color}"></span><span><span class="pop-title">${escapeHtml(model)}</span><span class="pop-sub">${active ? 'Current model' : escapeHtml(provider.name)}</span></span></button>`);
@@ -1257,16 +1714,14 @@ function renderModelMenu(filter = '') {
     search.focus();
   }
   $('#model-refresh')?.addEventListener('click', async () => {
-    const pid = state.session?.provider || 'gemini';
+    const pid = state.session?.provider || 'nvidia';
     const btn = $('#model-refresh');
     btn.textContent = '…';
     btn.disabled = true;
     try {
-      const res = await api.invoke('providers:refresh', { provider: pid });
-      const target = state.providers.find((item) => item.id === pid);
-      if (target && Array.isArray(res?.models)) target.models = res.models;
+      await syncProviderCatalogs(pid === 'simulator' ? null : pid);
       renderModelMenu($('#model-search')?.value || '');
-      toast(`Updated ${pid} model list.`);
+      toast('Updated live model list.');
     } catch (error) {
       toast(error.message);
       btn.textContent = 'Refresh';
@@ -1406,6 +1861,78 @@ function bind() {
   $('#keys-btn').addEventListener('click', openKeys);
   $('#keys-close').addEventListener('click', closeKeys);
   $('#keys-screen').addEventListener('click', (event) => { if (event.target.id === 'keys-screen') closeKeys(); });
+  $('#mcp-btn')?.addEventListener('click', openMcp);
+  $('#mcp-close')?.addEventListener('click', closeMcp);
+  $('#mcp-screen')?.addEventListener('click', (event) => { if (event.target.id === 'mcp-screen') closeMcp(); });
+  $('#mcp-refresh')?.addEventListener('click', openMcp);
+  $('#mcp-add')?.addEventListener('click', async () => {
+    const name = $('#mcp-name').value.trim();
+    const raw = $('#mcp-command').value.trim();
+    const scope = $('#mcp-scope').value;
+    if (!name || !raw) { toast('Enter a server name and command or URL.'); return; }
+    try {
+      let payload;
+      if (/^https?:\/\//i.test(raw)) {
+        payload = { name, scope, cwd: state.project, url: raw };
+      } else {
+        const parts = raw.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map((s) => s.replace(/^["']|["']$/g, '')) || [raw];
+        payload = { name, scope, cwd: state.project, command: parts[0], args: parts.slice(1) };
+      }
+      const updated = await api.invoke('mcp:save', payload);
+      $('#mcp-name').value = '';
+      $('#mcp-command').value = '';
+      renderMcpRows(updated);
+      toast(`Added MCP server "${name}".`);
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+
+  $('#hooks-btn')?.addEventListener('click', openHooks);
+  $('#hooks-close')?.addEventListener('click', closeHooks);
+  $('#hooks-screen')?.addEventListener('click', (event) => { if (event.target.id === 'hooks-screen') closeHooks(); });
+  $('#hook-add')?.addEventListener('click', async () => {
+    const event = $('#hook-event').value;
+    const matcher = $('#hook-matcher').value.trim() || '*';
+    const scope = $('#hook-scope').value;
+    const command = $('#hook-command').value.trim();
+    if (!command) { toast('Enter a shell command for the hook.'); return; }
+    try {
+      const updated = await api.invoke('hooks:save', { event, matcher, scope, command, cwd: state.project });
+      $('#hook-command').value = '';
+      renderHookRows(updated);
+      toast(`Added ${event} hook.`);
+    } catch (error) {
+      toast(error.message);
+    }
+  });
+
+  $('#helper-btn')?.addEventListener('click', openHelper);
+  $('#helper-close')?.addEventListener('click', closeHelper);
+  $('#helper-screen')?.addEventListener('click', (event) => { if (event.target.id === 'helper-screen') closeHelper(); });
+  for (const preset of $$('.helper-preset')) {
+    preset.addEventListener('click', async () => {
+      const task = preset.dataset.helperTask;
+      closeHelper();
+      await api.invoke('chat:helper', { sessionId: state.session.id, task });
+    });
+  }
+  $('#helper-run')?.addEventListener('click', async () => {
+    const task = $('#helper-task').value.trim();
+    if (!task) { toast('Enter a task for the Helper Agent.'); return; }
+    closeHelper();
+    $('#helper-task').value = '';
+    await api.invoke('chat:helper', { sessionId: state.session.id, task });
+  });
+
+  $('#slash-btn')?.addEventListener('click', () => {
+    const prompt = $('#prompt');
+    prompt.value = '/';
+    prompt.focus();
+    resizePrompt();
+    updateCommands();
+  });
+
   $('#memory-btn').addEventListener('click', openMemory);
   $('#memory-close').addEventListener('click', closeMemory);
   $('#memory-save').addEventListener('click', saveMemory);
@@ -1454,9 +1981,35 @@ function bind() {
   });
   $('#prompt').addEventListener('input', () => {
     resizePrompt();
+    updateCommands();
     updateMentions().catch(() => {});
   });
   $('#prompt').addEventListener('keydown', (event) => {
+    const cmdOpen = !$('#command-menu')?.classList.contains('hidden') && state.commandMatches.length > 0;
+    if (cmdOpen) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        state.commandIndex = (state.commandIndex + 1) % state.commandMatches.length;
+        $$('.cmd-item').forEach((el, idx) => el.classList.toggle('active', idx === state.commandIndex));
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        state.commandIndex = (state.commandIndex - 1 + state.commandMatches.length) % state.commandMatches.length;
+        $$('.cmd-item').forEach((el, idx) => el.classList.toggle('active', idx === state.commandIndex));
+        return;
+      }
+      if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) {
+        event.preventDefault();
+        selectCommand(state.commandMatches[state.commandIndex].name);
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        hideCommands();
+        return;
+      }
+    }
     const menuOpen = !$('#mention-menu').classList.contains('hidden') && state.mentionMatches.length > 0;
     if (menuOpen) {
       if (event.key === 'ArrowDown') {
@@ -1607,6 +2160,9 @@ function bind() {
     } else if (event.key === 'Escape') {
       if (state.keysOpen) closeKeys();
       else if (state.memoryOpen) closeMemory();
+      else if (state.mcpOpen) closeMcp();
+      else if (state.hooksOpen) closeHooks();
+      else if (state.helperOpen) closeHelper();
       else if (state.streaming && state.session) api.invoke('chat:stop', state.session.id).catch(() => {});
     }
   });

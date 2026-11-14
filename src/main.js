@@ -10,6 +10,8 @@ const crypto = require('crypto');
 const { execFile } = require('child_process');
 const { KeyStore, SessionStore, SettingsStore } = require('./store');
 const { Engine } = require('./engine');
+const { McpManager } = require('./engine/mcp');
+const { HooksManager } = require('./engine/hooks');
 const { providerList, testKey, fetchProviderModels, PROVIDERS } = require('./engine/providers');
 
 const PROCESS_STARTED = Date.now();
@@ -35,6 +37,8 @@ let win = null;
 let keys = null;
 let sessions = null;
 let settings = null;
+let mcp = null;
+let hooks = null;
 let engine = null;
 let windowReadyMs = null;
 let firstPaintMs = null;
@@ -312,10 +316,19 @@ function registerIpc() {
     encryption: safeStorage.isEncryptionAvailable(),
   }));
 
-  ipcMain.handle('providers:list', () => providerList(SELF_CHECK));
+  ipcMain.handle('providers:list', () => {
+    const cached = settings.get('providerModels', {});
+    return providerList(SELF_CHECK).map((p) => ({
+      ...p,
+      models: Array.isArray(cached[p.id]) && cached[p.id].length ? [...new Set([...p.models, ...cached[p.id]])] : p.models,
+    }));
+  });
 
   ipcMain.handle('providers:refresh', async (_event, { provider } = {}) => {
     const models = await fetchProviderModels(provider, keys.get(provider));
+    const cached = settings.get('providerModels', {});
+    cached[provider] = models;
+    settings.set('providerModels', cached);
     return { provider, models };
   });
 
@@ -481,6 +494,56 @@ function registerIpc() {
     return { stopped: true };
   });
 
+  ipcMain.handle('chat:compact', async (_event, { sessionId, focus } = {}) => engine.compactSession(sessionId, focus));
+
+  ipcMain.handle('chat:btw', async (_event, { sessionId, question } = {}) => engine.askBtw(sessionId, question));
+
+  ipcMain.handle('chat:helper', async (_event, { sessionId, task } = {}) => engine.runHelper(sessionId, task));
+
+  ipcMain.handle('chat:export', async (_event, { sessionId } = {}) => {
+    const session = sessions.get(sessionId);
+    if (!session) throw new Error('No such chat.');
+    const lines = [`# ${session.title || 'CAELIX Chat'}`, '', `- Project: \`${session.cwd}\``, `- Provider: \`${session.provider}\` · Model: \`${session.model}\``, ''];
+    for (const msg of session.messages || []) {
+      if (msg.hidden || msg.role === 'tool') continue;
+      lines.push(`## ${msg.role === 'user' ? 'User' : 'CAELIX'}`, '', String(msg.content || ''), '');
+    }
+    const content = lines.join('\n');
+    const result = await dialog.showSaveDialog(win, {
+      title: 'Export chat transcript',
+      defaultPath: path.join(session.cwd || projectPath(), `${(session.title || 'caelix-chat').replace(/[^a-z0-9_-]+/gi, '-').toLowerCase()}.md`),
+      filters: [{ name: 'Markdown', extensions: ['md'] }],
+    });
+    if (result.canceled || !result.filePath) return { canceled: true };
+    fs.writeFileSync(result.filePath, content, 'utf8');
+    return { canceled: false, filePath: result.filePath };
+  });
+
+  ipcMain.handle('mcp:list', (_event, { cwd } = {}) => mcp.status(cwd || projectPath()));
+
+  ipcMain.handle('mcp:save', async (_event, payload = {}) => {
+    mcp.saveServer({ ...payload, cwd: payload.cwd || projectPath() });
+    return mcp.status(payload.cwd || projectPath());
+  });
+
+  ipcMain.handle('mcp:toggle', async (_event, payload = {}) => {
+    mcp.toggleServer({ ...payload, cwd: payload.cwd || projectPath() });
+    return mcp.status(payload.cwd || projectPath());
+  });
+
+  ipcMain.handle('mcp:remove', async (_event, payload = {}) => {
+    mcp.removeServer({ ...payload, cwd: payload.cwd || projectPath() });
+    return mcp.status(payload.cwd || projectPath());
+  });
+
+  ipcMain.handle('hooks:list', (_event, { cwd } = {}) => hooks.list(cwd || projectPath()));
+
+  ipcMain.handle('hooks:save', (_event, payload = {}) => hooks.saveHook({ ...payload, cwd: payload.cwd || projectPath() }));
+
+  ipcMain.handle('hooks:toggle', (_event, payload = {}) => hooks.toggleHook({ ...payload, cwd: payload.cwd || projectPath() }));
+
+  ipcMain.handle('hooks:remove', (_event, payload = {}) => hooks.removeHook({ ...payload, cwd: payload.cwd || projectPath() }));
+
   ipcMain.handle('permission:respond', (_event, { id, decision }) => answerPermission(id, decision));
 
   ipcMain.handle('question:respond', (_event, { id, answer }) => answerQuestion(id, answer));
@@ -548,9 +611,13 @@ async function setup() {
   keys = new KeyStore(userData());
   sessions = new SessionStore(userData());
   settings = new SettingsStore(userData());
+  mcp = new McpManager(userData());
+  hooks = new HooksManager(userData());
   engine = new Engine({
     sessions,
     keys,
+    mcp,
+    hooks,
     emit,
     ask: requestPermission,
     askUser: requestQuestion,

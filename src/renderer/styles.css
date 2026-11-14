@@ -998,3 +998,209 @@ html[data-theme="light"] .permission-card { background: linear-gradient(180deg, 
 html[data-theme="light"] .permission-title { color: #7a5209; }
 html[data-theme="light"] .question-card { background: linear-gradient(180deg, rgba(36, 114, 204, 0.10), rgba(246, 250, 255, 0.95)); border-color: #b4cde8; }
 html[data-theme="light"] .question-title { color: #1b5699; }
+
+/* MCP, Hooks, Helper Agent, Slash Commands, /btw, Rate-limit countdown */
+.modal-wide { width: min(680px, 100%); }
+.config-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 260px;
+  overflow: auto;
+  margin-bottom: 14px;
+}
+.config-empty {
+  padding: 14px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+.config-item {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--bg-3);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.config-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+.config-badge {
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-4);
+  color: var(--muted);
+  font-family: var(--mono);
+}
+.config-badge.ok { color: var(--green); background: rgba(70, 209, 133, 0.12); }
+.config-badge.err { color: var(--red); background: rgba(240, 113, 120, 0.12); }
+.config-detail {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.config-actions { margin-left: auto; display: flex; gap: 6px; }
+.config-actions button {
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+.config-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.config-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.config-row input, .config-row select {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+}
+.config-row button.primary {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 0;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.helper-presets {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.retry-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(240, 200, 121, 0.35);
+  background: rgba(240, 200, 121, 0.08);
+  color: var(--amber);
+  font-size: 12.5px;
+  margin: 6px 0;
+}
+.helper-card {
+  border: 1px solid rgba(125, 189, 245, 0.35);
+  background: linear-gradient(180deg, rgba(125, 189, 245, 0.08), rgba(16, 20, 26, 0.45));
+  border-radius: 11px;
+  padding: 10px 12px;
+  margin: 6px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+html[data-theme="light"] .helper-card {
+  background: linear-gradient(180deg, rgba(36, 114, 204, 0.08), rgba(248, 251, 255, 0.95));
+  border-color: #b4cde8;
+}
+.helper-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--accent);
+}
+.helper-steps {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.btw-card {
+  border: 1px dashed var(--line);
+  background: var(--bg-3);
+  border-radius: 11px;
+  padding: 10px 12px;
+  margin: 8px 0;
+}
+.btw-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.btw-close {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+}
+.hook-note {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  padding: 4px 8px;
+  border-left: 2px solid var(--accent);
+  margin: 4px 0;
+}
+.hook-note.blocked { border-left-color: var(--red); color: var(--red); }
+.error-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.error-actions button {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--text);
+  font-size: 12px;
+}
+.cmd-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  border-radius: 6px;
+}
+.cmd-item:hover, .cmd-item.active { background: var(--bg-3); }
+.cmd-name { font-family: var(--mono); color: var(--accent); min-width: 90px; }
+.cmd-desc { color: var(--muted); font-size: 11.5px; flex: 1; }

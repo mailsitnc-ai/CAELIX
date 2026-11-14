@@ -1,5 +1,16 @@
 # CAELIX changelog
 
+## 0.1.9 — MCP servers, hooks, slash commands, Helper Agent, rate-limit retries and NVIDIA NIM catalog
+
+- Added MCP server support (`src/engine/mcp.js`, `McpManager`) for stdio and HTTP servers configured in `.mcp.json` and user `mcp.json`, exposing discovered `mcp__<server>__<tool>` tools with permission-mode gating and a UI management modal (`MCP` button / `/mcp`).
+- Added shell Hooks (`src/engine/hooks.js`, `HooksManager`) for `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop` events configured in `.caelix/hooks.json` and user `hooks.json` (including exit-code `2` blocking), with a UI management modal (`Hooks` button / `/hooks`).
+- Added live slash command autocomplete (`/` button or typing `/` at the start of the composer) supporting `/compact`, `/btw`, `/helper`, `/agent`, `/mcp`, `/hooks`, `/memory`, `/keys`, `/model`, `/mode`, `/context`, `/cost`, `/usage`, `/status`, `/review`, `/export`, `/clear`, `/new`, and `/help`.
+- Added patient rate-limit (`429`) handling honoring `Retry-After` headers and exponential backoff up to 5 attempts with a live abortable countdown banner in the chat transcript.
+- Added a dedicated Helper Agent UI launcher (`Helper` button, `/helper`, `/agent`), live `subagent` step/summary cards in the transcript, and step telemetry in local simulator subagents.
+- Fixed JSON-array provider errors (such as Gemini `403 [{ "error": ... }]` responses) to extract readable messages, clear the typing dots, and show quick `Open Keys` and `Switch Model` action buttons.
+- Expanded the curated NVIDIA NIM catalog to 36 verified active models (`deepseek-ai/deepseek-v4.1-flash` default) with increased `/v1/models` sync capacity (`400`) and background catalog syncing when opening the model picker or saving a key.
+- Extended `checks/verify_features.js` to 14 checks and `src/selfcheck.js` to 22 steps covering MCP, Hooks, Slash Commands, Helper Agent, `/btw`, `/compact`, `429` countdown retries, and the expanded NVIDIA catalog.
+
 ## 0.1.8 — end-to-end verification checklist and release polish
 
 - Added `CHECKLIST.md` auditing every `features.md` and `SPEC.md` item with verified CLI, harness, source Electron self-check, and packaged `CAELIX.app` measurements and honest external blockers.

@@ -42,6 +42,8 @@
         </div>
         <button id="view-mode-btn" class="mini-chip" title="Toggle tool details (Ctrl+O)">Normal</button>
         <button id="theme-btn" class="icon-btn" title="Switch appearance" aria-label="Switch appearance">◐</button>
+        <button id="mcp-btn" class="ghost-btn" title="MCP servers (/mcp)">MCP</button>
+        <button id="hooks-btn" class="ghost-btn" title="Lifecycle hooks (/hooks)">Hooks</button>
         <button id="keys-btn" class="ghost-btn">Keys</button>
         <button id="panel-toggle" class="icon-btn" title="Toggle panel" aria-label="Toggle panel">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="2.5" width="13" height="11" rx="2.5" stroke="currentColor"/><path d="M10 2.5v11" stroke="currentColor"/></svg>
@@ -87,18 +89,21 @@
           </div>
           <div id="todo-bar" class="todo-bar hidden"></div>
           <div class="composer" id="composer">
+            <div id="command-menu" class="mention-menu hidden"></div>
             <div id="mention-menu" class="mention-menu hidden"></div>
             <div id="attachment-list" class="attachment-list hidden"></div>
             <div id="key-warning" class="key-warning hidden">
               <span id="key-warning-text">Add a provider key to send messages.</span>
               <button id="key-warning-open" type="button">Open Keys</button>
             </div>
-            <textarea id="prompt" rows="1" placeholder="Ask CAELIX to build, fix, or explain something… (@ to mention files)" aria-label="Message"></textarea>
+            <textarea id="prompt" rows="1" placeholder="Ask CAELIX to build, fix, or explain something… (/ commands, @ files)" aria-label="Message"></textarea>
             <div class="composer-bar">
               <div class="composer-left">
                 <button id="attach-btn" class="icon-btn" title="Attach a file or image" aria-label="Attach a file or image">
                   <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M9.8 4.6 5.2 9.2a2.2 2.2 0 0 0 3.1 3.1l4.6-4.6a3.6 3.6 0 0 0-5.1-5.1L3.5 6.9a5 5 0 0 0 7.1 7.1l2.2-2.2" stroke="currentColor" stroke-linecap="round"/></svg>
                 </button>
+                <button id="slash-btn" class="mini-chip" title="Slash commands (/compact, /btw, /mcp, /hooks, /helper)">/ Commands</button>
+                <button id="helper-btn" class="mini-chip" title="Run read-only Helper Agent (/helper)">Helper</button>
                 <button id="composer-mode" class="mini-chip">Manual</button>
                 <button id="composer-model" class="mini-chip model">gemini-2.5-flash</button>
               </div>
@@ -203,6 +208,97 @@
         <span class="lock-dot"></span>
         <span id="memory-prompt-info">Memory stays in this project folder.</span>
         <button id="memory-save" class="primary memory-save">Save memory</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="mcp-screen" class="overlay hidden">
+    <div class="keys-card modal-wide">
+      <button id="mcp-close" class="icon-btn keys-close" aria-label="Close MCP servers">×</button>
+      <div class="keys-head">
+        <img src="../../assets/icon-1024.png" alt="">
+        <div>
+          <h1>MCP Servers</h1>
+          <p>Connect stdio or HTTP Model Context Protocol servers. Discovered tools are prefixed with <code>mcp__</code> and obey your permission mode.</p>
+        </div>
+      </div>
+      <div id="mcp-list" class="config-list"></div>
+      <div class="config-form">
+        <div class="config-row">
+          <input id="mcp-name" placeholder="Server name (e.g. filesystem)" aria-label="MCP server name">
+          <select id="mcp-scope" aria-label="MCP config scope">
+            <option value="project">Project (.mcp.json)</option>
+            <option value="user">User (global)</option>
+          </select>
+        </div>
+        <div class="config-row">
+          <input id="mcp-command" placeholder="Command (e.g. npx @modelcontextprotocol/server-filesystem .) or HTTP URL" aria-label="MCP command or URL">
+          <button id="mcp-add" class="primary" type="button">Add &amp; Connect</button>
+        </div>
+      </div>
+      <div class="keys-foot memory-foot">
+        <span id="mcp-status-note">Configs are read from .mcp.json and user mcp.json.</span>
+        <button id="mcp-refresh" type="button">Reconnect all</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="hooks-screen" class="overlay hidden">
+    <div class="keys-card modal-wide">
+      <button id="hooks-close" class="icon-btn keys-close" aria-label="Close hooks">×</button>
+      <div class="keys-head">
+        <img src="../../assets/icon-1024.png" alt="">
+        <div>
+          <h1>Lifecycle Hooks</h1>
+          <p>Run shell commands on tool or prompt events. Hooks receive JSON on stdin; exit code <code>2</code> blocks the action.</p>
+        </div>
+      </div>
+      <div id="hooks-list" class="config-list"></div>
+      <div class="config-form">
+        <div class="config-row">
+          <select id="hook-event" aria-label="Hook event">
+            <option value="PreToolUse">PreToolUse</option>
+            <option value="PostToolUse">PostToolUse</option>
+            <option value="UserPromptSubmit">UserPromptSubmit</option>
+            <option value="Stop">Stop</option>
+          </select>
+          <input id="hook-matcher" placeholder="Tool matcher (e.g. bash or *)" value="*" aria-label="Hook matcher">
+          <select id="hook-scope" aria-label="Hook scope">
+            <option value="project">Project (.caelix/hooks.json)</option>
+            <option value="user">User (global)</option>
+          </select>
+        </div>
+        <div class="config-row">
+          <input id="hook-command" placeholder="Shell command (e.g. jq -r .tool | logger)" aria-label="Hook command">
+          <button id="hook-add" class="primary" type="button">Add Hook</button>
+        </div>
+      </div>
+      <div class="keys-foot memory-foot">
+        <span>Hooks run with CAELIX_HOOK_EVENT and CAELIX_PROJECT_DIR set.</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="helper-screen" class="overlay hidden">
+    <div class="keys-card">
+      <button id="helper-close" class="icon-btn keys-close" aria-label="Close Helper Agent">×</button>
+      <div class="keys-head">
+        <img src="../../assets/icon-1024.png" alt="">
+        <div>
+          <h1>Helper Agent</h1>
+          <p>Run a read-only subagent in a separate context to explore files, check tests, or find bugs without cluttering this chat.</p>
+        </div>
+      </div>
+      <div class="helper-presets">
+        <button type="button" class="empty-card helper-preset" data-helper-task="Explore the project layout and summarize the main modules."><b>Explore codebase</b>Map files and entrypoints.</button>
+        <button type="button" class="empty-card helper-preset" data-helper-task="Inspect recent files for edge cases, bugs, or error-handling gaps."><b>Find bugs</b>Scan for potential issues.</button>
+        <button type="button" class="empty-card helper-preset" data-helper-task="Find all tests, scripts, and checks and summarize how to run them."><b>Check tests</b>Locate tests and verify commands.</button>
+      </div>
+      <div class="config-form">
+        <div class="config-row">
+          <input id="helper-task" placeholder="Or enter a custom read-only research task for the Helper Agent…" aria-label="Helper Agent task">
+          <button id="helper-run" class="primary" type="button">Run Helper</button>
+        </div>
       </div>
     </div>
   </div>

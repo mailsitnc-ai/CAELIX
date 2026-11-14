@@ -53,6 +53,45 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function sleepAbortable(ms, signal, onTick) {
+  const start = Date.now();
+  const total = Math.max(0, Number(ms) || 0);
+  if (total === 0) return;
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('Cancelled.'));
+      return;
+    }
+    let done = false;
+    let tickTimer = null;
+    const cleanup = () => {
+      if (tickTimer) clearInterval(tickTimer);
+      clearTimeout(endTimer);
+      if (signal) signal.removeEventListener('abort', onAbort);
+    };
+    const onAbort = () => {
+      if (done) return;
+      done = true;
+      cleanup();
+      reject(new Error('Cancelled.'));
+    };
+    const endTimer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      cleanup();
+      resolve();
+    }, total);
+    if (typeof onTick === 'function' && total >= 1200) {
+      tickTimer = setInterval(() => {
+        if (done) return;
+        const left = Math.max(0, total - (Date.now() - start));
+        onTick(left);
+      }, 1000);
+    }
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 class Engine {
   constructor(options) {
     this.sessions = options.sessions;
@@ -61,6 +100,8 @@ class Engine {
     this.ask = options.ask;
     this.askUser = options.askUser;
     this.claudePath = options.claudePath;
+    this.mcp = options.mcp || null;
+    this.hooks = options.hooks || null;
     this.tasks = new TaskRegistry(options.taskDir);
     this.checkpoints = options.checkpointDir ? new CheckpointStore(options.checkpointDir) : null;
     this.terminals = new TerminalManager((event) => this.emit(event));
@@ -114,7 +155,8 @@ class Engine {
   systemPrompt(session) {
     const memory = this.loadMemory(session.cwd);
     const blocks = memory.map((entry) => `\n\nProject instructions from ${entry.file}:\n${entry.text}`);
-    const tools = toolDefinitions(session.cwd).map((tool) => tool.name).join(', ');
+    const mcpNames = this.mcp ? [...this.mcp.toolMap.keys()] : [];
+    const tools = [...toolDefinitions(session.cwd).map((tool) => tool.name), ...mcpNames].join(', ');
     const todos = Array.isArray(session.todos) && session.todos.length
       ? `\n\nCurrent task list:\n${session.todos.map((item) => `- [${item.status || 'pending'}] ${item.content}`).join('\n')}`
       : '';
@@ -235,6 +277,18 @@ class Engine {
       const provider = PROVIDERS[session.provider];
       if (!provider) throw new Error(`Unknown provider: ${session.provider}`);
 
+      if (this.hooks) {
+        const promptHook = await this.hooks.run('UserPromptSubmit', { sessionId, cwd: session.cwd, prompt: userMsg.content });
+        if (promptHook.blocked) throw new Error(promptHook.reason);
+        if (promptHook.notes.length) {
+          const noteText = promptHook.notes.map((n) => n.output).join('\n');
+          userMsg.content = `${userMsg.content}\n\n[Hook context]\n${noteText}`;
+          emit({ type: 'hook-event', event: 'UserPromptSubmit', output: noteText });
+        }
+      }
+
+      const mcpTools = this.mcp ? await this.mcp.toolDefinitions(session.cwd).catch(() => []) : [];
+
       let rounds = 0;
       const maxRounds = 10;
       while (rounds < maxRounds) {
@@ -251,6 +305,7 @@ class Engine {
           result = await this.callKeyed({
             session,
             messages,
+            extraTools: mcpTools,
             emit,
             signal: controller.signal,
           });
@@ -274,9 +329,38 @@ class Engine {
           emit({ type: 'tool-start', id: call.id, name: call.name, input: call.input });
           const toolStarted = Date.now();
           try {
-            const output = call.name === 'subagent'
-              ? await this.runSubagent({ session, call, emit, signal: controller.signal })
-              : await runner.execute(call.name, call.input);
+            if (this.hooks) {
+              const preHook = await this.hooks.run('PreToolUse', {
+                sessionId, cwd: session.cwd, tool: call.name, input: call.input,
+              });
+              if (preHook.blocked) {
+                emit({ type: 'hook-event', event: 'PreToolUse', tool: call.name, blocked: true, output: preHook.reason });
+                throw new Error(preHook.reason);
+              }
+              if (preHook.notes.length) {
+                emit({ type: 'hook-event', event: 'PreToolUse', tool: call.name, output: preHook.notes.map((n) => n.output).join('\n') });
+              }
+            }
+
+            let output;
+            if (call.name === 'subagent') {
+              output = await this.runSubagent({ session, call, emit, signal: controller.signal });
+            } else if (this.mcp?.isMcpTool(call.name)) {
+              const decision = await runner.permission(call.name, 'Run MCP tool', call.name, JSON.stringify(call.input || {}).slice(0, 140), 'network');
+              if (decision !== 'allow') throw new Error(`The user denied MCP tool ${call.name}.`);
+              output = await this.mcp.callTool(call.name, call.input, session.cwd);
+            } else {
+              output = await runner.execute(call.name, call.input);
+            }
+
+            if (this.hooks) {
+              const postHook = await this.hooks.run('PostToolUse', {
+                sessionId, cwd: session.cwd, tool: call.name, input: call.input, ok: true, output: String(output.output || '').slice(0, 4000),
+              });
+              if (postHook.notes.length) {
+                emit({ type: 'hook-event', event: 'PostToolUse', tool: call.name, output: postHook.notes.map((n) => n.output).join('\n') });
+              }
+            }
             if (output.todos) {
               todos = output.todos;
               session.todos = output.todos;
@@ -313,6 +397,11 @@ class Engine {
               });
             }
           } catch (error) {
+            if (this.hooks) {
+              await this.hooks.run('PostToolUse', {
+                sessionId, cwd: session.cwd, tool: call.name, input: call.input, ok: false, output: error.message,
+              }).catch(() => {});
+            }
             emit({
               type: 'tool-result',
               id: call.id,
@@ -338,6 +427,9 @@ class Engine {
         terminal,
         todos,
       });
+      if (this.hooks) {
+        await this.hooks.run('Stop', { sessionId, cwd: session.cwd, changes: changes.length }).catch(() => {});
+      }
       let checkpoint = null;
       if (changes.length && this.checkpoints) {
         try {
@@ -374,12 +466,12 @@ class Engine {
     }
   }
 
-  async callKeyed({ session, messages, emit, signal }) {
+  async callKeyed({ session, messages, extraTools = [], emit, signal }) {
     const provider = PROVIDERS[session.provider];
     const key = this.keys.get(session.provider);
     if (!key) throw new Error(`No ${provider.name} key is saved. Open Keys and add one.`);
     const { messages: conversation, compacted } = this.buildConversation(session, messages);
-    const tools = toolDefinitions(session.cwd);
+    const tools = [...toolDefinitions(session.cwd), ...extraTools];
     let emitted = false;
     let attempt = 0;
 
@@ -404,15 +496,21 @@ class Engine {
         return result;
       } catch (error) {
         if (signal?.aborted) throw new Error('Cancelled.');
-        const status = Number((String(error.message).match(/returned (\d{3})/) || [])[1] || 0);
-        const retryable = status === 408 || status === 429 || status >= 500
+        const status = Number(error.status || (String(error.message).match(/returned (\d{3})/) || [])[1] || 0);
+        const isRateLimit = status === 429;
+        const retryable = isRateLimit || status === 408 || status >= 500
           || /fetch failed|network|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(error.message);
-        if (!retryable || emitted || attempt >= 2) throw error;
+        const maxAttempts = isRateLimit ? 5 : 2;
+        if (!retryable || emitted || attempt >= maxAttempts) throw error;
         attempt += 1;
-        const waitMs = 600 * 2 ** (attempt - 1);
-        emit({ type: 'retry', attempt, waitMs, message: error.message });
-        await sleep(waitMs);
-        if (signal?.aborted) throw new Error('Cancelled.');
+        const fast = process.env.CAELIX_FAST_RETRY === '1';
+        const defaultWait = isRateLimit ? Math.min(45_000, 2000 * 2 ** (attempt - 1)) : 600 * 2 ** (attempt - 1);
+        const waitMs = fast ? 120 : (error.retryAfterMs || defaultWait);
+        const reason = isRateLimit ? 'Rate limit hit (429)' : status ? `Server error (${status})` : 'Connection error';
+        emit({ type: 'retry', attempt, maxAttempts, waitMs, remainingMs: waitMs, status, reason, message: error.message });
+        await sleepAbortable(waitMs, signal, (remainingMs) => {
+          emit({ type: 'retry', attempt, maxAttempts, waitMs, remainingMs, status, reason, message: error.message });
+        });
       }
     }
   }
@@ -432,7 +530,9 @@ class Engine {
     let summary = '';
 
     if (session.provider === 'simulator') {
-      summary = await this.localSubagent(runner, task);
+      summary = await this.localSubagent(runner, task, (tool, target) => {
+        emit({ type: 'subagent-event', parentId: call.id, tool, target });
+      });
     } else if (session.provider === 'claude') {
       summary = await this.claudeSubagent(session, task, signal);
     } else {
@@ -463,6 +563,7 @@ class Engine {
         }
         conversation.push({ role: 'assistant', content: result.text || '', toolCalls: result.toolCalls });
         for (const item of result.toolCalls) {
+          emit({ type: 'subagent-event', parentId: call.id, tool: item.name, target: item.input?.path || item.input?.pattern || '.' });
           if (!['read_file', 'list_dir', 'glob', 'grep'].includes(item.name)) {
             conversation.push({ role: 'tool', toolCallId: item.id, content: 'Error: the subagent may only read.' });
             continue;
@@ -481,8 +582,157 @@ class Engine {
     return { output: summary || 'The subagent returned no summary.', meta: { rounds: maxRounds } };
   }
 
-  async localSubagent(runner, task) {
+  async runHelper(sessionId, task) {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error('No active chat.');
+    const cleanTask = String(task || '').trim();
+    if (!cleanTask) throw new Error('Describe what the Helper Agent should investigate.');
+    const controller = new AbortController();
+    const call = { id: `helper_${Date.now()}`, name: 'subagent', input: { task: cleanTask, max_rounds: 4 } };
+    const emit = (event) => this.emit({ sessionId, ...event });
+    emit({ type: 'turn-start', at: Date.now() });
+    try {
+      const result = await this.runSubagent({ session, call, emit, signal: controller.signal });
+      emit({
+        type: 'done',
+        usage: null,
+        elapsedMs: 100,
+        estimatedTokens: estimateTokens(result.output),
+        changes: [],
+        todos: session.todos || [],
+        compacted: 0,
+        context: this.contextReport(session),
+        saved: false,
+      });
+      return { ok: true, summary: result.output };
+    } catch (error) {
+      emit({ type: 'error', message: error.message });
+      emit({ type: 'done', error: error.message, elapsedMs: 0, changes: [] });
+      return { ok: false, error: error.message };
+    }
+  }
+
+  async compactSession(sessionId, focus = '') {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error('That chat no longer exists.');
+    const all = Array.isArray(session.messages) ? session.messages : [];
+    if (all.length <= 4) {
+      return {
+        beforeTokens: this.contextReport(session).total,
+        afterTokens: this.contextReport(session).total,
+        compactedCount: 0,
+        summary: 'Conversation is already short; nothing to compact.',
+      };
+    }
+    const beforeReport = this.contextReport(session);
+    const keepCount = Math.min(4, all.length);
+    const head = all.slice(0, all.length - keepCount);
+    let tail = all.slice(all.length - keepCount);
+    while (tail.length && tail[0].role === 'tool') {
+      head.push(tail.shift());
+    }
+    let summaryText = '';
+    const key = PROVIDERS[session.provider]?.keyless ? null : this.keys.get(session.provider);
+    if (key && session.provider !== 'simulator' && session.provider !== 'claude') {
+      try {
+        const transcriptSnippet = head
+          .filter((m) => m.role === 'user' || m.role === 'assistant')
+          .map((m) => `${m.role.toUpperCase()}: ${String(m.content || '').slice(0, 600)}`)
+          .join('\n')
+          .slice(-12000);
+        const promptText = focus
+          ? `Summarize this conversation concisely for continuing work, focusing especially on: ${focus}\n\n${transcriptSnippet}`
+          : `Summarize this conversation concisely (goals, files changed, decisions, and next steps) so work can continue without losing context:\n\n${transcriptSnippet}`;
+        const out = await streamOpenAICompatible({
+          provider: session.provider,
+          model: session.model,
+          apiKey: key,
+          messages: [
+            { role: 'system', content: 'You are summarizing an ongoing coding session into a concise handoff note.' },
+            { role: 'user', content: promptText },
+          ],
+          tools: [],
+          onDelta: () => {},
+        });
+        summaryText = String(out.text || '').trim();
+      } catch {
+        summaryText = '';
+      }
+    }
+    if (!summaryText) {
+      const userGoals = head
+        .filter((m) => m.role === 'user' && !m.hidden && m.content)
+        .map((m) => `- User: ${String(m.content).replace(/\s+/g, ' ').slice(0, 140)}`)
+        .slice(-5);
+      const lastAssistant = head
+        .filter((m) => m.role === 'assistant' && m.content)
+        .slice(-2)
+        .map((m) => `- Outcome: ${String(m.content).replace(/\s+/g, ' ').slice(0, 180)}`);
+      summaryText = [
+        `Compacted ${head.length} earlier message(s)${focus ? ` (focus: ${focus})` : ''}:`,
+        ...userGoals,
+        ...lastAssistant,
+      ].join('\n');
+    }
+    const summaryMsg = {
+      id: `compact_${Date.now()}`,
+      role: 'user',
+      content: `[Compacted context summary]\n${summaryText}`,
+      createdAt: Date.now(),
+    };
+    const nextMessages = [summaryMsg, ...tail];
+    if (typeof this.sessions.update === 'function') {
+      this.sessions.update(sessionId, { messages: nextMessages });
+    } else {
+      session.messages = nextMessages;
+    }
+    const afterSession = this.sessions.get(sessionId);
+    const afterReport = this.contextReport(afterSession);
+    this.emit({ sessionId, type: 'context', report: afterReport, compacted: head.length });
+    return {
+      beforeTokens: beforeReport.total,
+      afterTokens: afterReport.total,
+      compactedCount: head.length,
+      summary: summaryText,
+    };
+  }
+
+  async askBtw(sessionId, question) {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error('That chat no longer exists.');
+    const q = String(question || '').trim();
+    if (!q) throw new Error('Provide a question after /btw.');
+    if (session.provider === 'simulator') {
+      const report = this.contextReport(session);
+      return {
+        question: q,
+        answer: `(Side note — not saved to chat history)\n\nFolder: \`${session.cwd}\` · Mode: **${session.mode}** · Context: **${report.total} tokens** (${report.percent}%).\n\nAnswer to "${q}": You can inspect project memory via \`/memory\`, compact older turns with \`/compact\`, or run a read-only helper scan with \`/helper <task>\`.`,
+      };
+    }
+    if (session.provider === 'claude') {
+      throw new Error('/btw inline side-questions are supported directly on API providers and simulator.');
+    }
+    const key = this.keys.get(session.provider);
+    if (!key) throw new Error(`No ${PROVIDERS[session.provider]?.name || session.provider} key is saved. Open Keys and add one.`);
+    const { messages: conversation } = this.buildConversation(session, [{
+      role: 'user',
+      content: `[EPHEMERAL SIDE QUESTION (/btw) — Answer briefly without modifying files or planning edits]: ${q}`,
+    }]);
+    const res = await streamOpenAICompatible({
+      provider: session.provider,
+      model: session.model,
+      apiKey: key,
+      messages: conversation,
+      tools: [],
+      onDelta: () => {},
+    });
+    return { question: q, answer: res.text || '(no response)' };
+  }
+
+  async localSubagent(runner, task, onStep = null) {
+    onStep?.('list_dir', '.');
     const listing = await runner.listDir({ path: '.' });
+    onStep?.('glob', '**/*');
     const files = await runner.glob({ pattern: '**/*' });
     const names = String(files.output).split('\n').filter(Boolean).slice(0, 40);
     const lines = [
@@ -497,6 +747,7 @@ class Engine {
     for (const name of names) {
       if (!/\.(md|txt|json|js|ts|tsx|jsx|html|css|py|go|rs|sh|yml|yaml)$/i.test(name)) continue;
       try {
+        onStep?.('read_file', name);
         const read = await runner.readFile({ path: name, limit: 40 });
         if (read.meta?.lines) {
           lines.push('', `--- ${name} (${read.meta.lines} lines) ---`, String(read.output).split('\n').slice(0, 12).join('\n'));
@@ -571,6 +822,30 @@ class Engine {
     const userText = String(messages.filter((message) => message.role === 'user').slice(-1)[0]?.content || '');
     const toolsDemo = /multi-edit/i.test(userText);
     const extendedDemo = /checklist-and-notebook/i.test(userText);
+    const helperDemo = /helper-agent-demo/i.test(userText);
+
+    if (helperDemo) {
+      if (round === 1) {
+        const text = 'Delegating a read-only workspace check to the Helper Agent.\n\n';
+        await this.streamWords(text, emit, signal);
+        return {
+          text,
+          toolCalls: [{
+            id: 'sim_subagent',
+            name: 'subagent',
+            input: { task: 'Inspect files and report workspace contents', max_rounds: 2 },
+          }],
+          usage: { prompt_tokens: 140, completion_tokens: 45, total_tokens: 185 },
+        };
+      }
+      const text = 'Helper Agent scan complete.';
+      await this.streamWords(text, emit, signal);
+      return {
+        text,
+        toolCalls: [],
+        usage: { prompt_tokens: 210, completion_tokens: 30, total_tokens: 240 },
+      };
+    }
 
     if (extendedDemo) {
       if (round === 1) {
@@ -860,6 +1135,7 @@ class Engine {
 
   dispose() {
     this.terminals.dispose();
+    this.mcp?.dispose();
   }
 }
 

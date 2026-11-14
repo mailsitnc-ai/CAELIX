@@ -149,6 +149,11 @@ async function run(args) {
 
   const sessions = {
     get: (id) => (id === session.id ? session : null),
+    update: (id, patch) => {
+      if (id !== session.id) return null;
+      Object.assign(session, patch, { updatedAt: Date.now() });
+      return session;
+    },
     saveTurn: (id, messages, extra = {}) => {
       if (id !== session.id) return null;
       session.messages.push(...messages);
@@ -161,6 +166,10 @@ async function run(args) {
   };
   const keys = { get: (id) => envKey(id) };
   const { Engine } = require('./engine');
+  const { McpManager } = require('./engine/mcp');
+  const { HooksManager } = require('./engine/hooks');
+  const mcp = new McpManager(path.join(os.homedir(), 'Library', 'Application Support', 'CAELIX'));
+  const hooks = new HooksManager(path.join(os.homedir(), 'Library', 'Application Support', 'CAELIX'));
 
   let wroteText = false;
   const line = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -169,6 +178,8 @@ async function run(args) {
   const engine = new Engine({
     sessions,
     keys,
+    mcp,
+    hooks,
     ask: async (request) => {
       if (json) line({ type: 'permission', ...request, decision: args.yes ? 'allow' : 'deny' });
       else note(`permission ${args.yes ? 'granted' : 'denied'}: ${request.action} ${request.target}`);
@@ -207,6 +218,7 @@ async function run(args) {
   });
 
   const result = await engine.send(session.id, prompt);
+  engine.dispose();
   if (session.changes.length) {
     for (const change of session.changes) {
       if (!json) note(`changed: ${change.file} (+${change.additions ?? 0} −${change.deletions ?? 0})`);

@@ -19,8 +19,10 @@ Markers:
 - [x] **Streaming** — Token/word-by-word delta rendering (`121 ms` to first words in source self-check, `106 ms` in packaged self-check) and in-place tool cards verified in `npm run selfcheck`.
 - [x] **Cancellation** — `Engine.stop(sessionId)` aborts mid-stream turn cleanly (`Cancelled.`) and terminates subprocesses; verified in `node checks/verify_features.js`.
 - [x] **Context control & compaction** — Category token report (`System and memory`, `Messages`, `Tool results`) verified in `npm run selfcheck` (`434` / `437` tokens); `>100k` token compaction preserving full saved transcript verified in `node checks/verify_features.js`.
-- [x] **Retries** — Bounded HTTP retry (max 2 retries with backoff on `408`/`429`/`5xx`/network errors) verified against local mock HTTP server (`429 → 500 → 200 SSE`, and 3× `503` fail-fast) in `node checks/verify_features.js`.
-- [x] **Usage telemetry** — Token count (`310`/`320` tokens) and elapsed time (`0.4s`/`0.5s`) recorded per turn and rendered in composer footer and status strip (`checks/steps/09-context-report.png`, `11-light-theme.png`).
+- [x] **Retries & rate-limit countdown** — Patient `429` retry up to 5 attempts honoring `Retry-After` and exponential backoff (`2s`–`45s`) with live countdown events (`retry`), plus bounded retries for `408`/`5xx`/network errors, verified against local mock HTTP servers in `node checks/verify_features.js`.
+- [x] **Structured error recovery** — Unwraps array/object API errors (including Gemini `403 [{ "error": ... }]`), removes typing indicator dots cleanly, and shows quick `Open Keys` / `Switch Model` buttons.
+- [x] **Usage telemetry** — Token count and elapsed time recorded per turn and rendered in composer footer and status strip (`checks/steps/09-context-report.png`, `11-light-theme.png`).
+- [x] **Slash commands, `/compact` & `/btw`** — Autocomplete `/` menu and execution of `/compact`, `/btw` (ephemeral side note excluded from session history), `/helper`, `/mcp`, `/hooks`, `/memory`, `/keys`, `/model`, `/mode`, `/context`, `/cost`, `/usage`, `/status`, `/review`, `/export`, `/clear`, `/new`, and `/help` verified in `npm run selfcheck` and `node checks/verify_features.js`.
 
 ---
 
@@ -38,7 +40,9 @@ Markers:
 - [x] `task_start` / `task_output` / `task_stop` — Background process lifecycle verified in `npm run selfcheck` ("background task starts, lists and stops").
 - [x] `skill` — Local skill discovery (`SKILLS.md` / `.agents/skills/*/SKILL.md` / `CAELIX.md`) verified in `npm run selfcheck`.
 - [x] `present_plan` & `ask_user` — Plan card and interactive/headless question cards verified in `npm run selfcheck` and `node src/cli.js run`.
-- [x] `subagent` — Bounded subagent tool registered in `19 tools.` with local simulator path in `Engine.localSubagent`.
+- [x] `subagent` & Helper Agent — Read-only `subagent` tool, live step/summary card (`Helper Agent`), UI launcher modal (`Helper`), and `/helper` command verified in `npm run selfcheck`.
+- [x] **MCP servers (`src/engine/mcp.js`)** — Stdio and HTTP MCP client support (`.mcp.json` & user `mcp.json`), dynamic `mcp__<server>__<tool>` registration/execution, and UI management modal verified in `node checks/verify_features.js` and `npm run selfcheck`.
+- [x] **Hooks (`src/engine/hooks.js`)** — `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop` shell hooks (`.caelix/hooks.json` & user `hooks.json`) with JSON stdin and exit-code `2` blocking + UI modal verified in `node checks/verify_features.js` and `npm run selfcheck`.
 
 ---
 
@@ -56,8 +60,8 @@ Markers:
 - [x] **Three-column layout & proportions** — `48 px` top bar with traffic-light inset, `260 px` left sidebar (collapsed `56 px`), max `800 px` centered transcript & composer (`16 px` radius), `380 px` right panel (`Changes`, `Terminal`, `Context`), dark default + light theme (`checks/steps/01-empty-state.png`, `checks/selfcheck.png`, `checks/steps/11-light-theme.png`).
 - [x] **Remaining surfaces implemented & checked** — File/image attachments + drag-drop + `@` mentions, inline checkpoints + restore, system prompt inspector, missing-key Send gate, bypass warning banner, Normal/Verbose (`Ctrl+O`), keyboard shortcuts (`Cmd+N`, `Cmd+\`, `Cmd+B`, `Cmd+K`, `Ctrl+O`, `` Ctrl+` ``, `Esc`), desktop notifications when unfocused.
 - [x] **Startup & memory budgets (`< 2000 ms`)**:
-  - Source self-check (`env -u ELECTRON_RUN_AS_NODE npm run selfcheck`): `21/21` steps passed, `windowOpenMs: 531 ms`, `firstPaintMs: 55 ms`, working set `455,664 KB` (`445 MB`), `0` errors.
-  - Packaged bundle (`dist/CAELIX.app`, `codesign --verify --strict` exit `0`): `21/21` steps passed, `windowOpenMs: 340 ms`, `firstPaintMs: 99.5 ms`, working set `412,224 KB` (`403 MB`), `0` errors.
+  - Source self-check (`env -u ELECTRON_RUN_AS_NODE npm run selfcheck`): `22/22` steps passed, `window 539 ms`, `first paint 106.8 ms`, working set `379 MB`, `0` errors.
+  - Packaged bundle (`dist/CAELIX.app`, `codesign --verify --strict` exit `0`): `22/22` steps passed, `window 515 ms`, `first paint 110.3 ms`, working set `336 MB`, `0` errors.
 - [x] **CAELIX branding & Desktop shortcut** — Four-point star SVG/PNG/`.icns` assets used across window, Dock, bundle `Info.plist`, and `/Users/shivam/Desktop/CAELIX.app` (`scripts/package.js`).
 
 ---
@@ -65,6 +69,7 @@ Markers:
 ## 5. External Providers (`features.md` §3)
 
 - [x] **Encrypted local keystore (`safeStorage`)** — Save, mask (`••••••••real`), reload exclusion from renderer, and delete verified in `npm run selfcheck`; `keys.enc` stored in macOS Application Support outside repository.
-- [ ] **Live Gemini / OpenRouter / NVIDIA API keys** — Request formatting, SSE parser, retry loop, model catalog refresh (`providers:refresh`), and custom model ID entry are implemented and SSE+retry tested against a local mock HTTP server (`node checks/verify_features.js`), but live remote calls were not run without user API keys.
+- [x] **NVIDIA NIM catalog & sync** — `36` verified curated NVIDIA models (`deepseek-ai/deepseek-v4.1-flash` default) plus public/keyed `/v1/models` catalog discovery up to `400` models verified in `node checks/verify_features.js` and `npm run selfcheck`.
+- [ ] **Live Gemini / OpenRouter / NVIDIA API keys** — Request formatting, SSE parser, 5-attempt `429` countdown retry loop, array error parsing, model catalog refresh (`providers:refresh`), and custom model ID entry are implemented and SSE+retry tested against local mock HTTP servers (`node checks/verify_features.js`), but live keyed inference calls were not run without user API keys.
 - [ ] **Optional real `claude` CLI provider** — `Engine.runClaude` JSON-stream subprocess integration implemented and binary detected at `~/.local/bin/claude`, but blocked from live execution because local CLI auth state is unauthenticated (`loggedIn: false`).
 
