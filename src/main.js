@@ -552,7 +552,7 @@ function registerIpc() {
 
   ipcMain.handle('chat:compact', async (_event, { sessionId, focus } = {}) => engine.compactSession(sessionId, focus));
 
-  ipcMain.handle('chat:reset', (_event, { sessionId } = {}) => engine.resetContext(sessionId));
+  ipcMain.handle('chat:reset', async (_event, { sessionId, focus } = {}) => engine.resetContext(sessionId, focus));
 
   ipcMain.handle('chat:btw', async (_event, { sessionId, question } = {}) => engine.askBtw(sessionId, question));
 

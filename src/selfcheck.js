@@ -611,7 +611,7 @@ async function run(context) {
       return 'Chat <-> Code switcher, shared MCP/Hooks/Agents/Skills, and Code folder picker verified';
     });
 
-    await step('reset chat AI context with /reset while keeping scroll', async () => {
+    await step('reset chat usage with /reset while carrying context summary forward', async () => {
       const initialCount = await evaluate('document.querySelectorAll(".session-item").length');
       const prevActiveId = await evaluate('window.__caelixState.activeId');
       await click('#new-chat');
@@ -626,18 +626,20 @@ async function run(context) {
       await setValue('#prompt', '/reset');
       await click('#send-btn');
       await waitFor('document.querySelectorAll(".context-reset-divider").length === 1', 5000, 'reset divider rendered');
-      await waitFor('window.__caelixState.contextReport && window.__caelixState.contextReport.messages === 0', 5000, 'active messages reset to 0');
+      await waitFor('window.__caelixState.contextReport && window.__caelixState.contextReport.messages === 1 && window.__caelixState.contextReport.toolTokens === 0', 5000, 'context shrunk to 1 compact handoff note');
+      const hasHandoffNote = await evaluate('document.querySelector("#transcript").textContent.includes("First message before reset.")');
+      if (!hasHandoffNote) throw new Error('Expected /reset handoff note to summarize earlier conversation.');
       const keptMsgs = await evaluate('document.querySelectorAll(".msg").length');
       if (keptMsgs < 2) throw new Error('Expected chat scroll to remain visible above reset divider.');
       await setValue('#prompt', 'Fresh turn after reset.');
       await click('#send-btn');
       await waitFor('window.__caelixState.streaming === false && document.querySelectorAll(".msg").length >= 4', 15000, 'reply after reset');
-      await waitFor(`window.__caelixState.contextReport && window.__caelixState.contextReport.messages >= 2 && window.__caelixState.contextReport.savedMessages >= ${beforeResetMsgs} + window.__caelixState.contextReport.messages`, 5000, 'only new turn in active AI memory');
+      await waitFor(`window.__caelixState.contextReport && window.__caelixState.contextReport.messages >= 3 && window.__caelixState.contextReport.savedMessages >= ${beforeResetMsgs} + window.__caelixState.contextReport.messages`, 5000, 'handoff + fresh turn in active AI memory');
       await click('.session-item.active .session-delete');
       await waitFor('document.querySelector(".session-item.active .session-delete.armed")', 3000, 'reset test delete armed');
       await click('.session-item.active .session-delete');
       await waitFor(`document.querySelectorAll(".session-item").length === ${initialCount}`, 5000, 'temp /reset chat deleted');
-      return '/reset cleared active AI memory (0 messages), kept saved scroll, and isolated next turn';
+      return '/reset summarized ongoing chat into compact handoff, lowered usage, and preserved scroll';
     });
 
     await step('collapse and restore the right panel', async () => {

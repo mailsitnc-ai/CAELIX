@@ -584,6 +584,14 @@ function updateToolCard(id, { ok, output, durationMs }) {
   if (!ok) card.classList.add('expanded');
 }
 
+function buildResetDivider(summary) {
+  const divider = document.createElement('div');
+  divider.className = 'context-reset-divider';
+  if (summary) divider.title = summary;
+  divider.innerHTML = '<span>Context reset — usage cleared, context summary carried forward</span>';
+  return divider;
+}
+
 function renderTranscript() {
   const transcript = $('#transcript');
   transcript.innerHTML = '';
@@ -597,13 +605,10 @@ function renderTranscript() {
     if (message.role === 'tool') results.set(message.toolCallId, message);
   }
   for (let idx = 0; idx < session.messages.length; idx += 1) {
-    if (session.contextOffset && idx === session.contextOffset) {
-      const divider = document.createElement('div');
-      divider.className = 'context-reset-divider';
-      divider.innerHTML = '<span>Context reset — fresh memory starts here</span>';
-      transcript.appendChild(divider);
-    }
     const message = session.messages[idx];
+    if (session.contextOffset && idx === session.contextOffset) {
+      transcript.appendChild(buildResetDivider(message.resetHandoff ? message.content : ''));
+    }
     if (message.role === 'tool' || message.hidden) continue;
     if (message.role === 'user') {
       transcript.appendChild(buildUserMessageNode(message.content, message.attachments));
@@ -633,10 +638,7 @@ function renderTranscript() {
     }
   }
   if (session.contextOffset && session.contextOffset >= session.messages.length) {
-    const divider = document.createElement('div');
-    divider.className = 'context-reset-divider';
-    divider.innerHTML = '<span>Context reset — fresh memory starts here</span>';
-    transcript.appendChild(divider);
+    transcript.appendChild(buildResetDivider(''));
   }
   scrollToBottom(true);
 }
@@ -664,21 +666,26 @@ function renderChanges() {
   }
 }
 
-async function resetCurrentChatContext() {
+async function resetCurrentChatContext(focus = '') {
   if (!state.session) return;
   if (state.streaming) {
     toast('Stop the current reply before resetting context.');
     return;
   }
-  const res = await api.invoke('chat:reset', { sessionId: state.session.id });
+  toast('Summarizing context & resetting usage…');
+  const res = await api.invoke('chat:reset', { sessionId: state.session.id, focus });
   state.session = await api.invoke('sessions:get', state.session.id);
   state.contextReport = res.report || await api.invoke('context:get', { sessionId: state.session.id }).catch(() => null);
   state.lastUsageText = '';
-  renderTodos([]);
-  renderTranscript();
-  renderContext();
-  renderStatusStrip();
-  toast(`Chat context reset (${res.beforeTokens.toLocaleString()} → ${res.afterTokens.toLocaleString()} tokens).`);
+  renderAll();
+  if (res.summarizedCount > 0) {
+    appendInlineNote(
+      'Context reset — ready to continue',
+      `Summarized **${res.summarizedCount}** message(s) into a lightweight handoff note (**${res.beforeTokens.toLocaleString()} → ${res.afterTokens.toLocaleString()}** tokens) so CAELIX remembers what you were doing while resetting chat usage.\n\n${res.summary}`,
+    );
+  } else {
+    toast('Context usage is already fresh.');
+  }
 }
 
 function renderContext() {
@@ -712,7 +719,7 @@ function renderContext() {
     </div>
     <div class="context-foot">${report.messages} active message(s) in AI memory${report.savedMessages > report.messages ? ` · ${report.savedMessages} kept in scroll` : ''}. Not an account limit.</div>
     <div class="context-actions-row">
-      <button type="button" id="context-reset-btn" class="context-action-btn" title="Clear AI memory in this chat without starting a new chat (/reset)">Reset chat context (/reset)</button>
+      <button type="button" id="context-reset-btn" class="context-action-btn" title="Summarize what has happened so far and reset chat usage (/reset)">Reset chat context (/reset)</button>
     </div>`;
   $('#context-reset-btn', node)?.addEventListener('click', () => { resetCurrentChatContext().catch((err) => toast(err.message)); });
   if (state.promptOpen) loadPromptInspector().catch(() => {});
@@ -1460,7 +1467,7 @@ function onChatEvent(event) {
 
 const SLASH_COMMANDS = [
   { name: '/compact', args: '[focus]', desc: 'Summarize older messages to save context tokens' },
-  { name: '/reset', args: '', desc: 'Reset this chat\'s AI memory to 0% without starting a new chat' },
+  { name: '/reset', args: '', desc: 'Summarize what has happened so far and reset chat usage to continue cleanly' },
   { name: '/btw', args: '<question>', desc: 'Ask an ephemeral side question without saving to history' },
   { name: '/chat', args: '', desc: 'Switch workspace to Chat mode (MCP, Skills, Hooks & Agents stay active)' },
   { name: '/code', args: '', desc: 'Switch workspace to Code mode with Changes, Terminal & folder picker' },
@@ -1629,7 +1636,7 @@ async function runSlashCommand(raw) {
       return true;
     }
     case '/reset': {
-      await resetCurrentChatContext();
+      await resetCurrentChatContext(arg);
       return true;
     }
     case '/btw': {

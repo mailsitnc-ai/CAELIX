@@ -889,17 +889,107 @@ class Engine {
     }
   }
 
-  resetContext(sessionId) {
+  async summarizeMessages(session, list, { focus = '', label = 'Compacted context' } = {}) {
+    let summaryText = '';
+    const key = PROVIDERS[session.provider]?.keyless ? null : this.pickKey(session.provider).key;
+    if (key && session.provider !== 'simulator' && session.provider !== 'claude') {
+      try {
+        const transcriptSnippet = list
+          .filter((m) => m.role === 'user' || m.role === 'assistant')
+          .map((m) => {
+            const tools = Array.isArray(m.toolCalls) && m.toolCalls.length
+              ? ` [tools: ${m.toolCalls.map((c) => `${c.name}${c.input?.path ? `(${c.input.path})` : ''}`).join(', ')}]`
+              : '';
+            return `${m.role.toUpperCase()}${tools}: ${String(m.content || '').slice(0, 600)}`;
+          })
+          .join('\n')
+          .slice(-12000);
+        const todoNote = Array.isArray(session.todos) && session.todos.length
+          ? `\n\nActive checklist:\n${session.todos.map((t) => `- [${t.status || 'pending'}] ${t.content}`).join('\n')}`
+          : '';
+        const promptText = focus
+          ? `Summarize this conversation concisely for continuing work (goals, files changed, decisions, and next steps), focusing especially on: ${focus}\n\n${transcriptSnippet}${todoNote}`
+          : `Summarize this conversation concisely (goals, files changed, key findings/decisions, and next steps) so work can continue immediately without losing context:\n\n${transcriptSnippet}${todoNote}`;
+        const out = await streamOpenAICompatible({
+          provider: session.provider,
+          model: session.model,
+          apiKey: key,
+          messages: [
+            { role: 'system', content: 'You are summarizing an ongoing session into a compact, high-signal handoff note so work can continue seamlessly.' },
+            { role: 'user', content: promptText },
+          ],
+          tools: [],
+          onDelta: () => {},
+        });
+        summaryText = String(out.text || '').trim();
+      } catch {
+        summaryText = '';
+      }
+    }
+    if (!summaryText) {
+      const userGoals = list
+        .filter((m) => m.role === 'user' && (!m.hidden || m.resetHandoff) && m.content)
+        .map((m) => `- User: ${String(m.content).replace(/\s+/g, ' ').slice(0, 160)}`)
+        .slice(-6);
+      const touched = [...new Set(list
+        .flatMap((m) => (Array.isArray(m.toolCalls) ? m.toolCalls : []))
+        .map((c) => `${c.name}${c.input?.path ? `(${c.input.path})` : ''}`)
+        .filter(Boolean))].slice(-10);
+      const lastAssistant = list
+        .filter((m) => m.role === 'assistant' && m.content)
+        .slice(-2)
+        .map((m) => `- Outcome: ${String(m.content).replace(/\s+/g, ' ').slice(0, 220)}`);
+      const activeTodos = Array.isArray(session.todos) && session.todos.length
+        ? [`- Tasks: ${session.todos.map((t) => `[${t.status || 'pending'}] ${t.content}`).join('; ')}`]
+        : [];
+      summaryText = [
+        `${label} (${list.length} earlier message(s))${focus ? ` [focus: ${focus}]` : ''}:`,
+        ...userGoals,
+        touched.length ? `- Tools/files: ${touched.join(', ')}` : '',
+        ...lastAssistant,
+        ...activeTodos,
+      ].filter(Boolean).join('\n');
+    }
+    return summaryText;
+  }
+
+  async resetContext(sessionId, focus = '') {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error('That chat no longer exists.');
     if (this.controllers.has(sessionId)) throw new Error('Stop the running reply before resetting context.');
     const beforeReport = this.contextReport(session);
-    const nextOffset = Array.isArray(session.messages) ? session.messages.length : 0;
+    const full = Array.isArray(session.messages) ? session.messages : [];
+    const offset = Math.max(0, Math.min(full.length, Number(session.contextOffset) || 0));
+    const active = full.slice(offset);
+    const substantive = active.filter((m) => !m.resetHandoff);
+    if (!substantive.length) {
+      return {
+        beforeTokens: beforeReport.total,
+        afterTokens: beforeReport.total,
+        summarizedCount: 0,
+        summary: active[0]?.resetHandoff ? String(active[0].content || '') : '',
+        report: beforeReport,
+      };
+    }
+    const summaryText = await this.summarizeMessages(session, substantive, {
+      focus,
+      label: 'Context reset handoff',
+    });
+    const handoffMsg = {
+      id: `reset_${Date.now()}`,
+      role: 'user',
+      hidden: true,
+      resetHandoff: true,
+      content: `[Context reset handoff — summary of ${substantive.length} earlier message(s) so work can continue]\n${summaryText}`,
+      createdAt: Date.now(),
+    };
+    const nextOffset = full.length;
+    const nextMessages = [...full, handoffMsg];
     if (typeof this.sessions.update === 'function') {
-      this.sessions.update(sessionId, { contextOffset: nextOffset, todos: [] });
+      this.sessions.update(sessionId, { messages: nextMessages, contextOffset: nextOffset });
     } else {
+      session.messages = nextMessages;
       session.contextOffset = nextOffset;
-      session.todos = [];
     }
     this.allowances.delete(sessionId);
     const afterSession = this.sessions.get(sessionId);
@@ -908,7 +998,8 @@ class Engine {
     return {
       beforeTokens: beforeReport.total,
       afterTokens: afterReport.total,
-      archivedMessages: nextOffset,
+      summarizedCount: substantive.length,
+      summary: summaryText,
       report: afterReport,
     };
   }
@@ -935,49 +1026,10 @@ class Engine {
     while (tail.length && tail[0].role === 'tool') {
       head.push(tail.shift());
     }
-    let summaryText = '';
-    const key = PROVIDERS[session.provider]?.keyless ? null : this.pickKey(session.provider).key;
-    if (key && session.provider !== 'simulator' && session.provider !== 'claude') {
-      try {
-        const transcriptSnippet = head
-          .filter((m) => m.role === 'user' || m.role === 'assistant')
-          .map((m) => `${m.role.toUpperCase()}: ${String(m.content || '').slice(0, 600)}`)
-          .join('\n')
-          .slice(-12000);
-        const promptText = focus
-          ? `Summarize this conversation concisely for continuing work, focusing especially on: ${focus}\n\n${transcriptSnippet}`
-          : `Summarize this conversation concisely (goals, files changed, decisions, and next steps) so work can continue without losing context:\n\n${transcriptSnippet}`;
-        const out = await streamOpenAICompatible({
-          provider: session.provider,
-          model: session.model,
-          apiKey: key,
-          messages: [
-            { role: 'system', content: 'You are summarizing an ongoing coding session into a concise handoff note.' },
-            { role: 'user', content: promptText },
-          ],
-          tools: [],
-          onDelta: () => {},
-        });
-        summaryText = String(out.text || '').trim();
-      } catch {
-        summaryText = '';
-      }
-    }
-    if (!summaryText) {
-      const userGoals = head
-        .filter((m) => m.role === 'user' && !m.hidden && m.content)
-        .map((m) => `- User: ${String(m.content).replace(/\s+/g, ' ').slice(0, 140)}`)
-        .slice(-5);
-      const lastAssistant = head
-        .filter((m) => m.role === 'assistant' && m.content)
-        .slice(-2)
-        .map((m) => `- Outcome: ${String(m.content).replace(/\s+/g, ' ').slice(0, 180)}`);
-      summaryText = [
-        `Compacted ${head.length} earlier message(s)${focus ? ` (focus: ${focus})` : ''}:`,
-        ...userGoals,
-        ...lastAssistant,
-      ].join('\n');
-    }
+    const summaryText = await this.summarizeMessages(session, head, {
+      focus,
+      label: 'Compacted',
+    });
     const summaryMsg = {
       id: `compact_${Date.now()}`,
       role: 'user',
