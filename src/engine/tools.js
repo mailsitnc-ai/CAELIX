@@ -365,10 +365,12 @@ class ToolRunner {
     const file = this.resolvePath(input.path);
     const relative = path.relative(this.root, file);
     let before = '';
+    let existed = true;
     try {
       before = await fsp.readFile(file, 'utf8');
     } catch {
       before = '';
+      existed = false;
     }
     const after = String(input.content ?? '');
     const decision = await this.permission(
@@ -387,10 +389,11 @@ class ToolRunner {
       file: relative,
       before,
       after,
+      existed,
       additions: diff.additions,
       deletions: diff.deletions,
     });
-    return { output: `Wrote ${relative} (${diff.additions} added, ${diff.deletions} removed).`, change: { file: relative, before, after, ...diff } };
+    return { output: `Wrote ${relative} (${diff.additions} added, ${diff.deletions} removed).`, change: { file: relative, before, after, existed, ...diff } };
   }
 
   async editFile(input) {
@@ -419,10 +422,11 @@ class ToolRunner {
       file: relative,
       before,
       after,
+      existed: true,
       additions: diff.additions,
       deletions: diff.deletions,
     });
-    return { output: `Edited ${relative} (${diff.additions} added, ${diff.deletions} removed).`, change: { file: relative, before, after, ...diff } };
+    return { output: `Edited ${relative} (${diff.additions} added, ${diff.deletions} removed).`, change: { file: relative, before, after, existed: true, ...diff } };
   }
 
   async multiEdit(input) {
@@ -470,6 +474,7 @@ class ToolRunner {
         file: relative,
         before: item.before,
         after: item.after,
+        existed: true,
         additions: diff.additions,
         deletions: diff.deletions,
       });

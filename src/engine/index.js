@@ -5,6 +5,7 @@ const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
 const { ToolRunner, TaskRegistry, toolDefinitions } = require('./tools');
+const { CheckpointStore } = require('./checkpoints');
 const { PROVIDERS, streamOpenAICompatible } = require('./providers');
 const { diffLines } = require('./diff');
 
@@ -60,6 +61,7 @@ class Engine {
     this.askUser = options.askUser;
     this.claudePath = options.claudePath;
     this.tasks = new TaskRegistry(options.taskDir);
+    this.checkpoints = options.checkpointDir ? new CheckpointStore(options.checkpointDir) : null;
     this.controllers = new Map();
     this.allowances = new Map();
   }
@@ -71,6 +73,20 @@ class Engine {
   stop(sessionId) {
     const controller = this.controllers.get(sessionId);
     if (controller) controller.abort();
+  }
+
+  listCheckpoints(sessionId) {
+    return this.checkpoints ? this.checkpoints.list(sessionId) : [];
+  }
+
+  rewindCheckpoint(sessionId, checkpointId) {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error('That chat no longer exists.');
+    if (!this.checkpoints) throw new Error('Checkpoints are not available on this surface.');
+    if (this.controllers.has(sessionId)) throw new Error('Stop the running reply before restoring a checkpoint.');
+    const result = this.checkpoints.rewind(sessionId, checkpointId, session.cwd);
+    this.emit({ type: 'rewound', sessionId, ...result });
+    return result;
   }
 
   loadMemory(cwd) {
@@ -281,6 +297,15 @@ class Engine {
         terminal,
         todos,
       });
+      let checkpoint = null;
+      if (changes.length && this.checkpoints) {
+        try {
+          checkpoint = this.checkpoints.capture(sessionId, changes, session.title);
+          if (checkpoint) emit({ type: 'checkpoint', checkpoint });
+        } catch {
+          checkpoint = null;
+        }
+      }
       const context = this.contextReport(saved || session);
       emit({
         type: 'done',
@@ -291,6 +316,7 @@ class Engine {
         todos,
         compacted,
         context,
+        checkpoint,
         saved: Boolean(saved),
       });
       emit({ type: 'context', report: context, compacted });

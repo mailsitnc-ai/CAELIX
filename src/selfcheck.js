@@ -372,6 +372,25 @@ async function run(context) {
     await sleep(250);
     await snap('context report');
 
+    await step('restore a checkpoint', async () => {
+      await click('[data-tab="changes"]');
+      const rows = await evaluate('document.querySelectorAll(".checkpoint-item").length');
+      if (!rows) throw new Error('No checkpoint rows are shown.');
+      const noteFile = path.join(workspace, 'caelix-note.md');
+      const before = await fsp.readFile(noteFile, 'utf8');
+      if (!before.includes('Multi-edit: applied through the real tool')) throw new Error('The multi-edit was not in the note before restoring.');
+      await click('.checkpoint-item .checkpoint-restore');
+      await waitFor('document.querySelector(".checkpoint-item .checkpoint-restore.armed")', 3000, 'restore armed');
+      await click('.checkpoint-item .checkpoint-restore');
+      await sleep(900);
+      const after = await fsp.readFile(noteFile, 'utf8');
+      if (after.includes('Multi-edit: applied through the real tool')) throw new Error('The checkpoint did not restore the note.');
+      if (!after.includes('# CAELIX self-check')) throw new Error('The restored note lost its original content.');
+      return `${rows} checkpoint(s); the newest restored the note`;
+    });
+    await sleep(200);
+    await snap('checkpoint restore');
+
     await step('protected paths refuse a bypass write', async () => {
       const { ToolRunner } = require('./engine/tools');
       const runner = new ToolRunner({ root: workspace, mode: 'bypass', ask: async () => 'deny' });

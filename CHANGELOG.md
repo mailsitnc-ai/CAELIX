@@ -1,5 +1,12 @@
 # CAELIX changelog
 
+## 0.1.4 — checkpoints and restore
+
+- Every turn that changes files saves a checkpoint outside the project, keeping the exact prior text of each file and whether it already existed; each chat keeps its newest 40.
+- The Changes panel lists checkpoints. Restore takes a second click, puts the files back and removes files that the turn had created.
+- A restore is refused while a reply is running, and checkpoint paths outside the project are ignored.
+- The self-check grew to 18 steps and 11 screenshots, including a real restore that removes the multi-edit from the note.
+
 ## 0.1.3 — memory, context and safer permissions
 
 - Mode labels now match the reference: Manual, Accept edits, Plan, Bypass permissions; permission cards offer Always allow, Allow once and Cancel.

@@ -26,6 +26,7 @@ if (SELF_CHECK) {
   for (const file of ['sessions.json', 'keys.enc']) {
     try { fs.rmSync(path.join(isolated, file), { force: true }); } catch { /* fresh run */ }
   }
+  try { fs.rmSync(path.join(isolated, 'checkpoints'), { recursive: true, force: true }); } catch { /* fresh run */ }
 }
 
 let win = null;
@@ -390,6 +391,10 @@ function registerIpc() {
     return engine.contextReport(session);
   });
 
+  ipcMain.handle('checkpoints:list', (_event, { sessionId } = {}) => engine.listCheckpoints(sessionId));
+
+  ipcMain.handle('checkpoints:rewind', (_event, { sessionId, checkpointId } = {}) => engine.rewindCheckpoint(sessionId, checkpointId));
+
   ipcMain.handle('terminal:run', async (_event, { sessionId, command }) => engine.runTerminal(sessionId, command));
 
   ipcMain.handle('shell:open-external', (_event, url) => {
@@ -413,6 +418,7 @@ async function setup() {
     emit,
     ask: requestPermission,
     askUser: requestQuestion,
+    checkpointDir: path.join(userData(), 'checkpoints'),
     claudePath: path.join(os.homedir(), '.local', 'bin', 'claude'),
   });
 

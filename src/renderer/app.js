@@ -36,6 +36,7 @@ const state = {
   contextReport: null,
   memory: null,
   memoryOpen: false,
+  checkpoints: [],
 };
 
 const MODES = [
@@ -424,6 +425,72 @@ function renderContext() {
     <div class="context-foot">${report.messages} saved message(s) in this chat.</div>`;
 }
 
+function renderCheckpoints() {
+  const node = $('#checkpoint-list');
+  if (!node) return;
+  if (!state.checkpoints.length) {
+    node.innerHTML = '<div class="checkpoint-empty">Turns that change files can be restored here.</div>';
+    return;
+  }
+  node.innerHTML = '';
+  for (const checkpoint of state.checkpoints) {
+    const item = document.createElement('div');
+    item.className = 'checkpoint-item';
+    const time = new Date(checkpoint.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    item.innerHTML = `
+      <span class="checkpoint-dot"></span>
+      <span class="checkpoint-time">${escapeHtml(time)}</span>
+      <span class="checkpoint-files">${checkpoint.filesChanged} file${checkpoint.filesChanged === 1 ? '' : 's'}</span>
+      <button class="checkpoint-restore">Restore</button>`;
+    const button = item.querySelector('.checkpoint-restore');
+    let armed = false;
+    let timer = null;
+    button.addEventListener('click', async () => {
+      if (!armed) {
+        armed = true;
+        button.classList.add('armed');
+        button.textContent = 'Restore?';
+        timer = setTimeout(() => {
+          armed = false;
+          button.classList.remove('armed');
+          button.textContent = 'Restore';
+        }, 2500);
+        return;
+      }
+      clearTimeout(timer);
+      button.disabled = true;
+      button.textContent = 'Restoring…';
+      try {
+        const result = await api.invoke('checkpoints:rewind', {
+          sessionId: state.session.id,
+          checkpointId: checkpoint.id,
+        });
+        toast(`Restored ${result.restored.length} file${result.restored.length === 1 ? '' : 's'}.`);
+        await openSession(state.session.id);
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = 'Restore';
+        toast(error.message);
+      }
+    });
+    node.appendChild(item);
+  }
+}
+
+async function loadCheckpoints() {
+  if (!state.session) {
+    state.checkpoints = [];
+    renderCheckpoints();
+    return;
+  }
+  try {
+    state.checkpoints = await api.invoke('checkpoints:list', { sessionId: state.session.id });
+  } catch {
+    state.checkpoints = [];
+  }
+  renderCheckpoints();
+}
+
 function renderTerminal() {
   const node = $('#terminal');
   const rows = [];
@@ -524,6 +591,7 @@ function renderAll() {
   renderChanges();
   renderTerminal();
   renderContext();
+  renderCheckpoints();
   renderSessions();
 }
 
@@ -540,6 +608,7 @@ async function openSession(id) {
   } catch {
     state.contextReport = null;
   }
+  await loadCheckpoints();
   await api.invoke('sessions:set-active', id);
   renderAll();
   scrollToBottom(true);
@@ -557,6 +626,7 @@ async function newChat() {
   state.changes = [];
   state.terminal = [];
   state.contextReport = null;
+  state.checkpoints = [];
   await refreshSessions();
   renderAll();
   $('#prompt').focus();
@@ -749,6 +819,13 @@ function onChatEvent(event) {
       state.contextReport = event.report;
       renderContext();
       if (event.compacted) toast(`Compacted ${event.compacted} older message(s) to fit the context window.`);
+      break;
+    case 'checkpoint':
+      state.checkpoints = [event.checkpoint, ...state.checkpoints.filter((item) => item.id !== event.checkpoint.id)];
+      renderCheckpoints();
+      break;
+    case 'rewound':
+      toast(`Restored ${event.restored.length} file(s).`);
       break;
     case 'done':
       setStreaming(false);
@@ -1144,6 +1221,7 @@ async function init() {
       } catch {
         state.contextReport = null;
       }
+      await loadCheckpoints();
     }
   }
   if (!state.session) {
