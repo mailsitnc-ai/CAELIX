@@ -290,6 +290,23 @@ async function run(context) {
       await waitFor('document.querySelector("#terminal").textContent.includes("caelix-terminal-ok")', 10000, 'terminal output');
       return 'terminal echoed caelix-terminal-ok';
     });
+
+    await step('open a second terminal tab and keep its shell state', async () => {
+      await click('#terminal-new');
+      await waitFor('document.querySelectorAll(".terminal-tab").length === 2', 5000, 'second terminal');
+      const title = await evaluate('document.querySelector(".terminal-tab.active .terminal-tab-name")?.textContent || ""');
+      if (title !== 'Terminal 2') throw new Error(`The new tab is not active (${title}).`);
+      await setValue('#terminal-cmd', 'cd /tmp');
+      await click('#terminal-run');
+      await waitFor('window.__caelixState.terminalTabs.length === 2', 5000, 'two tabs loaded');
+      await sleep(300);
+      await setValue('#terminal-cmd', 'pwd');
+      await click('#terminal-run');
+      await waitFor('document.querySelector("#terminal").textContent.includes("/tmp")', 10000, 'shell state kept');
+      await click('.terminal-tab.active .terminal-tab-close');
+      await waitFor('document.querySelectorAll(".terminal-tab").length === 1', 5000, 'one terminal after close');
+      return 'second tab kept its cd and was closed';
+    });
     await snap('terminal');
 
     await step('rename the chat and switch mode', async () => {

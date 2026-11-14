@@ -37,6 +37,8 @@ const state = {
   memory: null,
   memoryOpen: false,
   checkpoints: [],
+  terminalTabs: [],
+  activeTerminalId: null,
 };
 
 const MODES = [
@@ -491,10 +493,37 @@ async function loadCheckpoints() {
   renderCheckpoints();
 }
 
+function activeTerminal() {
+  return state.terminalTabs.find((tab) => tab.id === state.activeTerminalId) || state.terminalTabs[0] || null;
+}
+
+function renderTerminalTabs() {
+  const node = $('#terminal-tabs');
+  if (!node) return;
+  node.innerHTML = '';
+  for (const tab of state.terminalTabs) {
+    const button = document.createElement('button');
+    button.className = `terminal-tab${tab.id === state.activeTerminalId ? ' active' : ''}`;
+    button.dataset.tabId = tab.id;
+    button.innerHTML = `<span class="terminal-tab-name">${escapeHtml(tab.title)}</span><span class="terminal-tab-close" title="Close terminal">×</span>`;
+    button.addEventListener('click', async (event) => {
+      if (event.target.closest('.terminal-tab-close')) return;
+      await selectTerminal(tab.id);
+    });
+    button.querySelector('.terminal-tab-close').addEventListener('click', async (event) => {
+      event.stopPropagation();
+      await closeTerminalTab(tab.id);
+    });
+    node.appendChild(button);
+  }
+}
+
 function renderTerminal() {
   const node = $('#terminal');
+  if (!node) return;
+  const tab = activeTerminal();
   const rows = [];
-  for (const entry of state.terminal) {
+  for (const entry of tab?.entries || []) {
     if (entry.text) rows.push(`<span>${escapeHtml(entry.text)}</span>`);
   }
   node.innerHTML = rows.join('') || '<span style="color:#6d747d">Commands and their output appear here.</span>';
@@ -509,6 +538,55 @@ function appendTerminal(text, cls) {
   span.textContent = text;
   node.appendChild(span);
   node.scrollTop = node.scrollHeight;
+}
+
+async function loadTerminalTabs() {
+  if (!state.session) {
+    state.terminalTabs = [];
+    state.activeTerminalId = null;
+    renderTerminalTabs();
+    renderTerminal();
+    return;
+  }
+  try {
+    const data = await api.invoke('terminal:tabs', { sessionId: state.session.id });
+    state.terminalTabs = data.tabs || [];
+    state.activeTerminalId = data.activeId || state.terminalTabs[0]?.id || null;
+  } catch {
+    state.terminalTabs = [];
+    state.activeTerminalId = null;
+  }
+  renderTerminalTabs();
+  renderTerminal();
+}
+
+async function selectTerminal(tabId) {
+  state.activeTerminalId = tabId;
+  renderTerminalTabs();
+  renderTerminal();
+  if (state.session) {
+    api.invoke('terminal:active', { sessionId: state.session.id, tabId }).catch(() => {});
+  }
+  $('#terminal-cmd').focus();
+}
+
+async function newTerminalTab() {
+  if (!state.session) return;
+  const data = await api.invoke('terminal:new', { sessionId: state.session.id });
+  state.terminalTabs = data.tabs || [];
+  state.activeTerminalId = data.activeId || data.tab?.id || null;
+  renderTerminalTabs();
+  renderTerminal();
+  $('#terminal-cmd').focus();
+}
+
+async function closeTerminalTab(tabId) {
+  if (!state.session) return;
+  const data = await api.invoke('terminal:close', { sessionId: state.session.id, tabId });
+  state.terminalTabs = data.tabs || [];
+  state.activeTerminalId = data.activeId || state.terminalTabs[0]?.id || null;
+  renderTerminalTabs();
+  renderTerminal();
 }
 
 function renderKeys() {
@@ -609,6 +687,7 @@ async function openSession(id) {
     state.contextReport = null;
   }
   await loadCheckpoints();
+  await loadTerminalTabs();
   await api.invoke('sessions:set-active', id);
   renderAll();
   scrollToBottom(true);
@@ -627,8 +706,11 @@ async function newChat() {
   state.terminal = [];
   state.contextReport = null;
   state.checkpoints = [];
+  state.terminalTabs = [];
+  state.activeTerminalId = null;
   await refreshSessions();
   renderAll();
+  await loadTerminalTabs();
   $('#prompt').focus();
 }
 
@@ -785,8 +867,6 @@ function onChatEvent(event) {
         id: event.id, name: event.name, input: event.input, status: 'running',
       });
       state.currentAssistant.body.appendChild(card);
-      state.terminal.push({ text: `\n$ ${event.name} ${event.input?.path || event.input?.command || ''}\n`, at: Date.now() });
-      renderTerminal();
       scrollToBottom();
       break;
     }
@@ -809,9 +889,21 @@ function onChatEvent(event) {
       state.changes.push(event);
       renderChanges();
       break;
-    case 'terminal-output':
-      state.terminal.push({ text: event.text, at: Date.now() });
-      appendTerminal(event.text);
+    case 'terminal-output': {
+      const tab = state.terminalTabs.find((item) => item.id === event.tabId);
+      if (tab) {
+        tab.entries = tab.entries || [];
+        tab.entries.push({ text: event.text, at: Date.now() });
+        if (tab.entries.length > 500) tab.entries.splice(0, tab.entries.length - 500);
+      }
+      if (event.tabId === state.activeTerminalId) appendTerminal(event.text);
+      break;
+    }
+    case 'terminal-tabs':
+      state.terminalTabs = event.tabs || [];
+      state.activeTerminalId = event.activeId || state.terminalTabs[0]?.id || null;
+      renderTerminalTabs();
+      renderTerminal();
       break;
     case 'todos':
       break;
@@ -1127,12 +1219,16 @@ function bind() {
       $('#changes-view').classList.toggle('hidden', target !== 'changes');
       $('#terminal-view').classList.toggle('hidden', target !== 'terminal');
       $('#context-view').classList.toggle('hidden', target !== 'context');
-      if (target === 'terminal') renderTerminal();
+      if (target === 'terminal') {
+        renderTerminalTabs();
+        renderTerminal();
+      }
       if (target === 'context') renderContext();
     });
   }
 
   $('#terminal-run').addEventListener('click', runTerminal);
+  $('#terminal-new').addEventListener('click', () => { newTerminalTab().catch((error) => toast(error.message)); });
   $('#terminal-cmd').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') runTerminal();
   });
@@ -1162,12 +1258,15 @@ async function runTerminal() {
   const input = $('#terminal-cmd');
   const command = input.value.trim();
   if (!command) return;
+  const tab = activeTerminal();
+  if (!tab) {
+    toast('Open a terminal first.');
+    return;
+  }
   input.value = '';
-  appendTerminal(`\n$ ${command}\n`, 'cmd-line');
   try {
-    const result = await api.invoke('terminal:run', { sessionId: state.session.id, command });
-    appendTerminal(result.output || '(no output)\n');
-    appendTerminal(`exit ${result.meta?.exitCode ?? '?'}\n`, result.meta?.exitCode ? 'err-line' : '');
+    const result = await api.invoke('terminal:run', { sessionId: state.session.id, command, tabId: tab.id });
+    if (result && result.exitCode) appendTerminal(`exit ${result.exitCode}\n`, 'err-line');
   } catch (error) {
     appendTerminal(`${error.message}\n`, 'err-line');
   }
@@ -1232,6 +1331,7 @@ async function init() {
 
   bind();
   try { await refreshMemory(); } catch { state.memory = null; }
+  await loadTerminalTabs();
   renderAll();
   resizePrompt();
   reportFirstPaint();

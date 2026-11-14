@@ -1,5 +1,12 @@
 # CAELIX changelog
 
+## 0.1.5 — tabbed terminals with a persistent shell
+
+- The Terminal panel now has tabs. Each tab runs its own `zsh` in the project folder, so `cd`, exports and shell functions persist between commands.
+- Output streams into the tab that ran the command, each tab can be closed, and closing the last one opens a fresh tab. Chat switching restores that chat's tabs, seeded with its earlier terminal text.
+- Commands time out with a clear error, a busy terminal refuses a second command, and every shell is terminated when the app quits.
+- The self-check grew to 19 steps: the new step opens a second tab, changes directory, proves `pwd` kept it, then closes the tab.
+
 ## 0.1.4 — checkpoints and restore
 
 - Every turn that changes files saves a checkpoint outside the project, keeping the exact prior text of each file and whether it already existed; each chat keeps its newest 40.

@@ -395,7 +395,15 @@ function registerIpc() {
 
   ipcMain.handle('checkpoints:rewind', (_event, { sessionId, checkpointId } = {}) => engine.rewindCheckpoint(sessionId, checkpointId));
 
-  ipcMain.handle('terminal:run', async (_event, { sessionId, command }) => engine.runTerminal(sessionId, command));
+  ipcMain.handle('terminal:tabs', (_event, { sessionId } = {}) => engine.terminalTabs(sessionId));
+
+  ipcMain.handle('terminal:new', (_event, { sessionId } = {}) => engine.newTerminal(sessionId));
+
+  ipcMain.handle('terminal:close', (_event, { sessionId, tabId } = {}) => engine.closeTerminal(sessionId, tabId));
+
+  ipcMain.handle('terminal:active', (_event, { sessionId, tabId } = {}) => engine.setActiveTerminal(sessionId, tabId));
+
+  ipcMain.handle('terminal:run', async (_event, { sessionId, command, tabId } = {}) => engine.runTerminal(sessionId, command, tabId));
 
   ipcMain.handle('shell:open-external', (_event, url) => {
     if (/^https?:/i.test(url)) return shell.openExternal(url);
@@ -460,6 +468,9 @@ if (!gotLock && !SELF_CHECK) {
   });
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin' || SELF_CHECK) app.quit();
+  });
+  app.on('before-quit', () => {
+    try { engine?.dispose(); } catch { /* best effort */ }
   });
   process.on('uncaughtException', (error) => {
     lastError = { message: error.message, stack: error.stack, at: new Date().toISOString() };

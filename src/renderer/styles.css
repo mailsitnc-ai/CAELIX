@@ -555,6 +555,15 @@ button { cursor: pointer; }
 .diff-line.del .diff-sign { color: var(--red); }
 .diff-line.same { color: var(--muted-2); }
 
+.terminal-bar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line-soft); background: #0d1014; }
+.terminal-tabs { display: flex; gap: 4px; flex: 1; min-width: 0; overflow-x: auto; }
+.terminal-tab { display: flex; align-items: center; gap: 5px; height: 24px; padding: 0 7px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); font-size: 10.5px; white-space: nowrap; }
+.terminal-tab:hover { background: var(--bg-3); }
+.terminal-tab.active { background: var(--bg-3); border-color: var(--line); color: var(--text-2); }
+.terminal-tab-close { color: var(--muted-2); font-size: 12px; line-height: 1; }
+.terminal-tab-close:hover { color: var(--red); }
+.terminal-new { width: 24px; height: 24px; flex: 0 0 24px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); font-size: 15px; line-height: 1; }
+.terminal-new:hover { background: var(--bg-3); border-color: var(--line); color: var(--text); }
 .terminal { padding: 10px 12px; font-family: var(--mono); font-size: 11px; line-height: 1.55; white-space: pre-wrap; color: #b9c6d4; }
 .terminal .cmd-line { color: var(--accent); }
 .terminal .err-line { color: #ffb0b0; }

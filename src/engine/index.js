@@ -6,6 +6,7 @@ const os = require('os');
 const { spawn } = require('child_process');
 const { ToolRunner, TaskRegistry, toolDefinitions } = require('./tools');
 const { CheckpointStore } = require('./checkpoints');
+const { TerminalManager } = require('./terminal');
 const { PROVIDERS, streamOpenAICompatible } = require('./providers');
 const { diffLines } = require('./diff');
 
@@ -62,6 +63,7 @@ class Engine {
     this.claudePath = options.claudePath;
     this.tasks = new TaskRegistry(options.taskDir);
     this.checkpoints = options.checkpointDir ? new CheckpointStore(options.checkpointDir) : null;
+    this.terminals = new TerminalManager((event) => this.emit(event));
     this.controllers = new Map();
     this.allowances = new Map();
   }
@@ -735,17 +737,38 @@ class Engine {
     });
   }
 
-  async runTerminal(sessionId, command) {
+  terminalTabs(sessionId) {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error('No active chat.');
-    const runner = new ToolRunner({
-      root: session.cwd,
-      mode: 'bypass',
-      ask: async () => 'allow',
-      emit: (event) => this.emit({ sessionId, ...event }),
-    });
-    const result = await runner.execute('bash', { command, timeout_ms: 120000 });
+    return this.terminals.ensure(sessionId, session.cwd, session.terminal || []);
+  }
+
+  newTerminal(sessionId) {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error('No active chat.');
+    const tab = this.terminals.create(sessionId, session.cwd);
+    return { tab, ...this.terminals.list(sessionId) };
+  }
+
+  closeTerminal(sessionId, tabId) {
+    const result = this.terminals.close(sessionId, tabId);
+    if (!result) throw new Error('That terminal is gone.');
     return result;
+  }
+
+  setActiveTerminal(sessionId, tabId) {
+    return this.terminals.setActive(sessionId, tabId);
+  }
+
+  async runTerminal(sessionId, command, tabId) {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error('No active chat.');
+    this.terminals.ensure(sessionId, session.cwd, session.terminal || []);
+    return this.terminals.run(sessionId, tabId, command, { timeoutMs: 120000 });
+  }
+
+  dispose() {
+    this.terminals.dispose();
   }
 }
 
