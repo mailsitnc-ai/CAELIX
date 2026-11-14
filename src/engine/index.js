@@ -7,7 +7,18 @@ const { spawn } = require('child_process');
 const { ToolRunner, TaskRegistry, toolDefinitions } = require('./tools');
 const { CheckpointStore } = require('./checkpoints');
 const { TerminalManager } = require('./terminal');
-const { PROVIDERS, streamOpenAICompatible } = require('./providers');
+const {
+  PROVIDERS,
+  MODEL_FAILOVER,
+  PROVIDER_SPILLOVER,
+  PROVIDER_HIGH_HEADROOM,
+  streamOpenAICompatible,
+} = require('./providers');
+
+const PLAN_SAFE_TOOLS = new Set([
+  'read_file', 'list_dir', 'glob', 'grep', 'skill',
+  'present_plan', 'ask_user', 'todo_write', 'subagent', 'task_list',
+]);
 const { AgentRegistry } = require('./agents');
 const { diffLines } = require('./diff');
 
@@ -184,6 +195,7 @@ class Engine {
     this.allowances = new Map();
     this.keyCursor = new Map();
     this.keyCooldowns = new Map();
+    this.autoFailover = options.autoFailover !== false;
   }
 
   getKeyPool(providerId) {
@@ -194,7 +206,15 @@ class Engine {
     return single ? [single] : [];
   }
 
-  pickKey(providerId) {
+  keyCooldownUntil(providerId, idx, model = null) {
+    const keyWide = this.keyCooldowns.get(`${providerId}:${idx}`) || 0;
+    const modelWide = model && MODEL_FAILOVER[providerId]
+      ? (this.keyCooldowns.get(`${providerId}:${model}:${idx}`) || 0)
+      : 0;
+    return Math.max(keyWide, modelWide);
+  }
+
+  pickKey(providerId, model = null) {
     const pool = this.getKeyPool(providerId);
     if (!pool.length) return { key: null, index: -1, poolSize: 0, allCooled: false, shortestWaitMs: 0 };
     const now = Date.now();
@@ -202,7 +222,7 @@ class Engine {
     let shortestWaitMs = Infinity;
     for (let offset = 0; offset < pool.length; offset += 1) {
       const idx = (start + offset) % pool.length;
-      const until = this.keyCooldowns.get(`${providerId}:${idx}`) || 0;
+      const until = this.keyCooldownUntil(providerId, idx, model);
       if (until <= now) {
         this.keyCursor.set(providerId, idx);
         return { key: pool[idx], index: idx, poolSize: pool.length, allCooled: false, shortestWaitMs: 0 };
@@ -219,13 +239,52 @@ class Engine {
     };
   }
 
-  markKeyCooldown(providerId, index, ms = 60000) {
+  markKeyCooldown(providerId, index, ms = 60000, model = null, scope = 'model') {
     if (index < 0) return;
-    this.keyCooldowns.set(`${providerId}:${index}`, Date.now() + Math.max(0, Number(ms) || 0));
+    const until = Date.now() + Math.max(0, Number(ms) || 0);
+    if (scope === 'key' || !model || !MODEL_FAILOVER[providerId]) {
+      this.keyCooldowns.set(`${providerId}:${index}`, until);
+    } else {
+      this.keyCooldowns.set(`${providerId}:${model}:${index}`, until);
+    }
     const pool = this.getKeyPool(providerId);
     if (pool.length > 1) {
       this.keyCursor.set(providerId, (index + 1) % pool.length);
     }
+  }
+
+  listFailoverTargets(primaryProvider, primaryModel) {
+    const out = [{ provider: primaryProvider, model: primaryModel, tier: 'primary' }];
+    const hasPool = typeof this.keys?.status === 'function' || typeof this.keys?.list === 'function';
+    if (this.autoFailover === false || !hasPool) return out;
+    const siblings = MODEL_FAILOVER[primaryProvider] || [];
+    for (const altModel of siblings) {
+      if (altModel && altModel !== primaryModel) {
+        out.push({ provider: primaryProvider, model: altModel, tier: 'sibling-model' });
+      }
+    }
+    // Cross-provider spillover activates when KeyStore (or a store exposing status()) holds keys on other providers.
+    if (typeof this.keys?.status === 'function') {
+      const configured = new Set(this.keys.status().filter((s) => s.configured !== false).map((s) => s.provider));
+      for (const altProvider of PROVIDER_SPILLOVER) {
+        if (altProvider === primaryProvider || !configured.has(altProvider)) continue;
+        if (!this.getKeyPool(altProvider).length) continue;
+        const preferred = PROVIDER_HIGH_HEADROOM[altProvider] || PROVIDERS[altProvider]?.defaultModel;
+        if (preferred) out.push({ provider: altProvider, model: preferred, tier: 'cross-provider' });
+        for (const extra of MODEL_FAILOVER[altProvider] || []) {
+          if (extra !== preferred) out.push({ provider: altProvider, model: extra, tier: 'cross-provider' });
+        }
+      }
+    }
+    return out;
+  }
+
+  filterToolsForTurn(session, allTools) {
+    if (session?.mode !== 'plan') return allTools;
+    return allTools.filter((tool) => PLAN_SAFE_TOOLS.has(tool.name) || (
+      String(tool.name || '').startsWith('mcp__')
+      && !/(delete|write|edit|exec|run|shell)/i.test(tool.name)
+    ));
   }
 
   isBusy(sessionId) {
@@ -337,15 +396,19 @@ class Engine {
     const merged = [...this.activeMessages(session), ...(incoming || [])]
       .filter((message) => message && (message.role === 'user' || message.role === 'assistant' || message.role === 'tool'));
     const slice = merged.slice(-60);
+    const tightTpm = session?.provider === 'groq'
+      || (session?.provider === 'openrouter' && String(session?.model || '').includes(':free'));
+    const latestToolCap = tightTpm ? 5500 : 9000;
+    const oldToolCap = tightTpm ? 280 : 360;
     let toolSeenFromEnd = 0;
     let history = slice.slice().reverse().map((message) => {
       let content = message.content;
       if (message.role === 'tool' && typeof content === 'string') {
         toolSeenFromEnd += 1;
-        if (toolSeenFromEnd > 4 && content.length > 520) {
-          content = `${content.slice(0, 440)}\n… [earlier tool output trimmed to reduce TPM; full result saved in transcript]`;
-        } else if (content.length > 12000) {
-          content = `${content.slice(0, 11800)}\n… [truncated large tool output for context/TPM]`;
+        if (toolSeenFromEnd > 2 && content.length > oldToolCap + 80) {
+          content = `${content.slice(0, oldToolCap)}\n… [earlier tool output trimmed to save rate-limit quota; full result saved in transcript]`;
+        } else if (content.length > latestToolCap) {
+          content = `${content.slice(0, latestToolCap - 200)}\n… [truncated large tool output for context/TPM]`;
         }
       }
       return {
@@ -446,6 +509,7 @@ class Engine {
       }
 
       const mcpTools = this.mcp ? await this.mcp.toolDefinitions(session.cwd).catch(() => []) : [];
+      const turnTarget = { provider: session.provider, model: session.model };
 
       let rounds = 0;
       const maxRounds = 15;
@@ -465,6 +529,7 @@ class Engine {
             session,
             messages,
             extraTools: mcpTools,
+            target: turnTarget,
             emit,
             signal: controller.signal,
           });
@@ -699,26 +764,33 @@ class Engine {
     }
   }
 
-  async callKeyed({ session, messages, extraTools = [], disableTools = false, emit, signal }) {
-    const provider = PROVIDERS[session.provider];
-    const pool = this.getKeyPool(session.provider);
-    if (!pool.length) throw new Error(`No ${provider.name} key is saved. Open Keys and add one.`);
-    const { messages: conversation, compacted } = this.buildConversation(session, messages);
-    const tools = disableTools ? [] : [...toolDefinitions(session.cwd), ...extraTools];
+  async callKeyed({ session, messages, extraTools = [], disableTools = false, target = null, emit, signal }) {
+    let activeProviderId = target?.provider || session.provider;
+    let activeModelId = target?.model || session.model;
+    const rawTools = disableTools ? [] : this.filterToolsForTurn(session, [...toolDefinitions(session.cwd), ...extraTools]);
     let emitted = false;
     let sleepAttempt = 0;
     let rotationCount = 0;
+    let switchCount = 0;
 
     for (;;) {
-      const picked = this.pickKey(session.provider);
+      const provider = PROVIDERS[activeProviderId];
+      const pool = this.getKeyPool(activeProviderId);
+      if (!pool.length) throw new Error(`No ${provider?.name || activeProviderId} key is saved. Open Keys and add one.`);
+      const activeSession = activeProviderId === session.provider && activeModelId === session.model
+        ? session
+        : { ...session, provider: activeProviderId, model: activeModelId };
+      const { messages: conversation, compacted } = this.buildConversation(activeSession, messages);
+      const picked = this.pickKey(activeProviderId, activeModelId);
       let textOut = '';
       try {
         const result = await streamOpenAICompatible({
-          provider: session.provider,
-          model: session.model,
+          provider: activeProviderId,
+          model: activeModelId,
           apiKey: picked.key,
           messages: conversation,
-          tools,
+          tools: rawTools,
+          compactToolSchemas: true,
           signal,
           onStatus: (status) => emit({ type: 'status', ...status }),
           onDelta: (delta) => {
@@ -729,6 +801,8 @@ class Engine {
         });
         result.text = result.text || textOut;
         result.compacted = compacted;
+        result.provider = activeProviderId;
+        result.model = activeModelId;
         return result;
       } catch (error) {
         if (signal?.aborted) throw new Error('Cancelled.');
@@ -739,18 +813,52 @@ class Engine {
           || /fetch failed|network|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(error.message);
         const fast = process.env.CAELIX_FAST_RETRY === '1';
 
-        if (isKeyAuthOrQuota && pool.length > 1 && !emitted && rotationCount < pool.length * 2) {
+        if (isKeyAuthOrQuota && !emitted) {
           const coolMs = fast ? 120 : (isRateLimit ? (error.retryAfterMs || 60_000) : 300_000);
-          this.markKeyCooldown(session.provider, picked.index, coolMs);
-          rotationCount += 1;
-          const next = this.pickKey(session.provider);
-          if (!next.allCooled) {
-            emit({
-              type: 'status',
-              stage: 'rotate',
-              message: `${provider.name} key #${picked.index + 1} hit ${status || 'limit'} — switched to key #${next.index + 1} of ${pool.length}…`,
+          const scope = isRateLimit && MODEL_FAILOVER[activeProviderId] ? 'model' : 'key';
+          this.markKeyCooldown(activeProviderId, picked.index, coolMs, activeModelId, scope);
+
+          // Level 1: try another healthy key within the same provider first
+          if (pool.length > 1 && rotationCount < pool.length * 2) {
+            const nextKey = this.pickKey(activeProviderId, activeModelId);
+            if (!nextKey.allCooled) {
+              rotationCount += 1;
+              emit({
+                type: 'status',
+                stage: 'rotate',
+                message: `${provider.name} key #${picked.index + 1} hit ${status || 'limit'} — switched to key #${nextKey.index + 1} of ${pool.length}…`,
+              });
+              continue;
+            }
+          }
+
+          // Level 2 & 3: spill over to a higher-headroom sibling model or another saved provider
+          const candidates = this.listFailoverTargets(activeProviderId, activeModelId);
+          if (switchCount < 6) {
+            const nextCandidate = candidates.find((c) => {
+              if (c.provider === activeProviderId && c.model === activeModelId) return false;
+              const p = this.pickKey(c.provider, c.model);
+              return p.poolSize > 0 && !p.allCooled;
             });
-            continue;
+            if (nextCandidate) {
+              switchCount += 1;
+              const prevLabel = `${provider.name} (${activeModelId})`;
+              activeProviderId = nextCandidate.provider;
+              activeModelId = nextCandidate.model;
+              if (target) {
+                target.provider = nextCandidate.provider;
+                target.model = nextCandidate.model;
+              }
+              rotationCount = 0;
+              emit({
+                type: 'status',
+                stage: 'fallback',
+                provider: nextCandidate.provider,
+                model: nextCandidate.model,
+                message: `${prevLabel} hit ${status || 'limit'} — switched to ${PROVIDERS[nextCandidate.provider].name} (${nextCandidate.model}) so work continues…`,
+              });
+              continue;
+            }
           }
         }
 
@@ -759,7 +867,7 @@ class Engine {
         sleepAttempt += 1;
         const defaultWait = isRateLimit ? Math.min(45_000, 2000 * 2 ** (sleepAttempt - 1)) : 600 * 2 ** (sleepAttempt - 1);
         const waitMs = fast ? 120 : (error.retryAfterMs || defaultWait);
-        if (isRateLimit) this.markKeyCooldown(session.provider, picked.index, waitMs);
+        if (isRateLimit) this.markKeyCooldown(activeProviderId, picked.index, waitMs, activeModelId, 'model');
         const reason = pool.length > 1 && isRateLimit
           ? `All ${pool.length} API keys cooling down`
           : isRateLimit ? 'Rate limit hit (429)' : status ? `Server error (${status})` : 'Connection error';

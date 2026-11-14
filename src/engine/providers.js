@@ -18,14 +18,17 @@ const PROVIDERS = {
     consoleUrl: 'https://openrouter.ai/keys',
     baseUrl: 'https://openrouter.ai/api/v1/chat/completions',
     models: [
-      'google/gemini-2.5-pro',
+      'openrouter/free',
+      'qwen/qwen3-coder:free',
+      'meta-llama/llama-3.3-70b-instruct:free',
+      'google/gemma-3-27b-it:free',
       'google/gemini-2.5-flash',
-      'openai/gpt-5',
-      'openai/gpt-5-mini',
-      'meta-llama/llama-3.3-70b-instruct',
+      'google/gemini-2.5-pro',
       'deepseek/deepseek-chat',
+      'openai/gpt-5-mini',
+      'openai/gpt-5',
     ],
-    defaultModel: 'google/gemini-2.5-flash',
+    defaultModel: 'openrouter/free',
     color: '#8b5cf6',
   },
   nvidia: {
@@ -121,19 +124,41 @@ const PROVIDERS = {
 };
 
 const MODEL_NOTES = {
-  'gemini-2.5-flash': 'Lightweight · 1M context',
-  'gemini-2.5-flash-lite': 'Ultra-lightweight · 1M context',
-  'gemini-2.5-pro': 'Deep reasoning · 1M context',
-  'meta-llama/llama-4-scout-17b-16e-instruct': 'Lightweight · Long context · High TPM',
-  'llama-3.1-8b-instant': 'Ultra-fast · High free TPM',
-  'llama-3.3-70b-versatile': 'Strong all-rounder · 128K',
-  'qwen/qwen3-32b': 'Compact coding & reasoning · 128K',
+  'gemini-2.5-flash-lite': 'Best for limits · Highest RPM/RPD · 1M context',
+  'gemini-2.5-flash': 'Lightweight · High headroom · 1M context',
+  'gemini-2.0-flash': 'Separate Gemini quota · 1M context',
+  'gemini-2.5-pro': 'Heavy · Lower RPM/RPD · 1M context',
+  'llama-3.1-8b-instant': 'Best for limits · Highest Groq free TPM/RPM',
+  'meta-llama/llama-4-scout-17b-16e-instruct': 'Lightweight · Good tool caller · High TPM',
+  'llama-3.3-70b-versatile': 'Strong coder · Moderate free TPM',
+  'qwen/qwen3-32b': 'Compact coding · Separate Groq bucket',
   'moonshotai/kimi-k2-instruct': 'Long-context tool caller · 128K',
-  'openai/gpt-oss-120b': 'Heavy · Low free TPM (rotate keys)',
-  'deepseek-ai/deepseek-v4.1-flash': 'Fast · High-capacity NIM default',
-  'nvidia/nemotron-3.5-lightning-30b-a3b': 'Lightweight · Fast · Long context',
-  'nvidia/nemotron-nano-3-30b-a3b': 'Lightweight · Fast',
-  'google/gemini-2.5-flash': 'Lightweight · 1M context',
+  'openai/gpt-oss-120b': 'Heavy · Eats free TPM quickly',
+  'deepseek-ai/deepseek-v4.1-flash': '40 RPM · No strict free TPM choke',
+  'nvidia/nemotron-3.5-lightning-30b-a3b': '40 RPM · Lightweight & fast',
+  'nvidia/nemotron-nano-3-30b-a3b': '40 RPM · Lightweight & fast',
+  'mistralai/codestral-22b-instruct-v0.1': '40 RPM · Fast compact coder',
+  'openrouter/free': 'Free router · Does not spend credits',
+  'qwen/qwen3-coder:free': 'Free coding · Separate bucket',
+  'meta-llama/llama-3.3-70b-instruct:free': 'Free · Strong general & code',
+  'google/gemma-3-27b-it:free': 'Free · Fast lightweight backup',
+  'google/gemini-2.5-flash': 'Paid credits · Lightweight · 1M context',
+};
+
+// Providers whose models carry separate RPM/TPM/RPD quota buckets.
+const MODEL_FAILOVER = {
+  gemini: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'],
+  groq: ['meta-llama/llama-4-scout-17b-16e-instruct', 'llama-3.1-8b-instant', 'qwen/qwen3-32b'],
+  openrouter: ['openrouter/free', 'qwen/qwen3-coder:free', 'meta-llama/llama-3.3-70b-instruct:free', 'google/gemma-3-27b-it:free'],
+};
+
+// Order when spilling over across different providers that have saved keys.
+const PROVIDER_SPILLOVER = ['gemini', 'nvidia', 'openrouter', 'groq'];
+const PROVIDER_HIGH_HEADROOM = {
+  gemini: 'gemini-2.5-flash-lite',
+  nvidia: 'deepseek-ai/deepseek-v4.1-flash',
+  openrouter: 'openrouter/free',
+  groq: 'meta-llama/llama-4-scout-17b-16e-instruct',
 };
 
 function providerList(selfcheck) {
@@ -191,13 +216,30 @@ function normalizeMessages(messages) {
   });
 }
 
-function toolSchema(tools) {
+function stripParamDescriptions(schema) {
+  if (!schema || typeof schema !== 'object') return schema;
+  if (Array.isArray(schema)) return schema.map(stripParamDescriptions);
+  const out = {};
+  for (const [k, v] of Object.entries(schema)) {
+    if (k === 'description') continue;
+    out[k] = stripParamDescriptions(v);
+  }
+  return out;
+}
+
+function compactText(text, max = 84) {
+  const first = String(text || '').split(/\.\s+/)[0].trim();
+  if (!first) return '';
+  return first.length <= max ? first : `${first.slice(0, max - 1)}…`;
+}
+
+function toolSchema(tools, compact = false) {
   return tools.map((tool) => ({
     type: 'function',
     function: {
       name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
+      description: compact ? compactText(tool.description) : tool.description,
+      parameters: compact ? stripParamDescriptions(tool.parameters) : tool.parameters,
     },
   }));
 }
@@ -239,6 +281,7 @@ async function readError(response) {
 async function streamOpenAICompatible(options) {
   const {
     provider, model, apiKey, messages, tools, signal, onDelta, onStatus,
+    compactToolSchemas = true,
     timeoutMs = Number(process.env.CAELIX_REQUEST_TIMEOUT_MS) || 35_000,
   } = options;
   const meta = PROVIDERS[provider];
@@ -260,7 +303,7 @@ async function streamOpenAICompatible(options) {
     temperature: 0.2,
   };
   if (tools && tools.length) {
-    body.tools = toolSchema(tools);
+    body.tools = toolSchema(tools, compactToolSchemas);
     body.tool_choice = 'auto';
   }
 
@@ -505,5 +548,6 @@ async function fetchProviderModels(provider, apiKey) {
 }
 
 module.exports = {
-  PROVIDERS, providerList, streamOpenAICompatible, testKey, fetchProviderModels,
+  PROVIDERS, MODEL_NOTES, MODEL_FAILOVER, PROVIDER_SPILLOVER, PROVIDER_HIGH_HEADROOM,
+  providerList, streamOpenAICompatible, testKey, fetchProviderModels,
 };

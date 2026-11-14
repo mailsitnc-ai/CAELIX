@@ -1249,6 +1249,7 @@ function onChatEvent(event) {
         state.currentAssistant.md.innerHTML = `<span class="typing"><i></i><i></i><i></i></span><span class="stream-note">${escapeHtml(event.message || '')}</span>`;
       }
       if (event.message) $('#stream-status').textContent = event.message;
+      if (event.stage === 'fallback' && event.message) toast(event.message);
       break;
     }
     case 'text': {
