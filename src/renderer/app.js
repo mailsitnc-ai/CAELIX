@@ -1264,11 +1264,14 @@ async function runTerminal() {
     return;
   }
   input.value = '';
+  state.terminalRunning = (state.terminalRunning || 0) + 1;
   try {
     const result = await api.invoke('terminal:run', { sessionId: state.session.id, command, tabId: tab.id });
     if (result && result.exitCode) appendTerminal(`exit ${result.exitCode}\n`, 'err-line');
   } catch (error) {
     appendTerminal(`${error.message}\n`, 'err-line');
+  } finally {
+    state.terminalRunning = Math.max(0, (state.terminalRunning || 1) - 1);
   }
 }
 

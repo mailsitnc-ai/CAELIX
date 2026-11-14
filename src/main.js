@@ -16,6 +16,7 @@ const APP_NAME = 'CAELIX';
 const ROOT = path.join(__dirname, '..');
 const ICON = path.join(ROOT, 'assets', 'icon-1024.png');
 const SELF_CHECK = process.env.CAELIX_SELFCHECK === '1';
+const CHECKS_DIR = process.env.CAELIX_CHECKS_DIR ? path.resolve(process.env.CAELIX_CHECKS_DIR) : path.join(ROOT, 'checks');
 
 app.setName(APP_NAME);
 
@@ -134,12 +135,12 @@ function createWindow() {
         getWindowReadyMs: () => windowReadyMs,
         getFirstPaintMs: () => firstPaintMs,
         getLastError: () => lastError,
-        checksDir: path.join(ROOT, 'checks'),
-        workspace: path.join(ROOT, 'checks', 'selfcheck-workspace'),
+        checksDir: CHECKS_DIR,
+        workspace: path.join(CHECKS_DIR, 'selfcheck-workspace'),
       }).catch((error) => {
         try {
-          fs.mkdirSync(path.join(ROOT, 'checks'), { recursive: true });
-          fs.writeFileSync(path.join(ROOT, 'checks', 'selfcheck-crash.txt'), String(error.stack || error));
+          fs.mkdirSync(CHECKS_DIR, { recursive: true });
+          fs.writeFileSync(path.join(CHECKS_DIR, 'selfcheck-crash.txt'), String(error.stack || error));
         } catch { /* best effort */ }
         app.exit(1);
       });
@@ -431,7 +432,7 @@ async function setup() {
   });
 
   if (SELF_CHECK) {
-    const workspace = path.join(ROOT, 'checks', 'selfcheck-workspace');
+    const workspace = path.join(CHECKS_DIR, 'selfcheck-workspace');
     fs.mkdirSync(workspace, { recursive: true });
     fs.rmSync(path.join(workspace, 'caelix-note.md'), { force: true });
     settings.set('lastCwd', workspace);

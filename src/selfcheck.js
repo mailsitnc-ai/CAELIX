@@ -298,11 +298,10 @@ async function run(context) {
       if (title !== 'Terminal 2') throw new Error(`The new tab is not active (${title}).`);
       await setValue('#terminal-cmd', 'cd /tmp');
       await click('#terminal-run');
-      await waitFor('window.__caelixState.terminalTabs.length === 2', 5000, 'two tabs loaded');
-      await sleep(300);
+      await waitFor('window.__caelixState.terminalTabs.length === 2 && !window.__caelixState.terminalRunning', 8000, 'cd finished in second tab');
       await setValue('#terminal-cmd', 'pwd');
       await click('#terminal-run');
-      await waitFor('document.querySelector("#terminal").textContent.includes("/tmp")', 10000, 'shell state kept');
+      await waitFor('document.querySelector("#terminal").textContent.includes("/tmp") && !window.__caelixState.terminalRunning', 10000, 'shell state kept');
       await click('.terminal-tab.active .terminal-tab-close');
       await waitFor('document.querySelectorAll(".terminal-tab").length === 1', 5000, 'one terminal after close');
       return 'second tab kept its cd and was closed';

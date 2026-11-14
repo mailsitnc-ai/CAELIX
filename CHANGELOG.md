@@ -1,5 +1,12 @@
 # CAELIX changelog
 
+## 0.1.6 — macOS app bundle and Desktop shortcut
+
+- Added `npm run package` (`scripts/package.js`) to build a signed-ready `dist/CAELIX.app` with CAELIX's executable, `Info.plist`, `caelix.icns` icon, and symlink-preserved Electron frameworks, stripping leftover `electron.icns` and `ElectronAsarIntegrity` metadata.
+- Packaging creates a `CAELIX.app` shortcut on the user's Desktop (skip with `--no-shortcut`).
+- Fixed the self-check race where closing a terminal tab interrupted an in-flight `pwd` IPC call, and added `CAELIX_CHECKS_DIR` so packaged self-checks keep the signed bundle untouched.
+- Verified both source and packaged `CAELIX.app` self-checks pass all 19 steps (packaged window 384 ms, first paint 67.8 ms).
+
 ## 0.1.5 — tabbed terminals with a persistent shell
 
 - The Terminal panel now has tabs. Each tab runs its own `zsh` in the project folder, so `cd`, exports and shell functions persist between commands.
