@@ -772,6 +772,7 @@ class Engine {
     let sleepAttempt = 0;
     let rotationCount = 0;
     let switchCount = 0;
+    const triedTargets = new Set();
 
     for (;;) {
       const provider = PROVIDERS[activeProviderId];
@@ -808,7 +809,7 @@ class Engine {
         if (signal?.aborted) throw new Error('Cancelled.');
         const status = Number(error.status || (String(error.message).match(/returned (\d{3})/) || [])[1] || 0);
         const isRateLimit = status === 429;
-        const isKeyAuthOrQuota = isRateLimit || status === 401 || status === 402 || status === 403;
+        const isKeyAuthOrQuota = isRateLimit || status === 401 || status === 402 || status === 403 || status === 404;
         const retryable = isRateLimit || status === 408 || status >= 500
           || /fetch failed|network|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(error.message);
         const fast = process.env.CAELIX_FAST_RETRY === '1';
@@ -816,10 +817,10 @@ class Engine {
         if (isKeyAuthOrQuota && !emitted) {
           const coolMs = fast ? 120 : (isRateLimit ? (error.retryAfterMs || 60_000) : 300_000);
           const scope = isRateLimit && MODEL_FAILOVER[activeProviderId] ? 'model' : 'key';
-          this.markKeyCooldown(activeProviderId, picked.index, coolMs, activeModelId, scope);
+          if (status !== 404) this.markKeyCooldown(activeProviderId, picked.index, coolMs, activeModelId, scope);
 
-          // Level 1: try another healthy key within the same provider first
-          if (pool.length > 1 && rotationCount < pool.length * 2) {
+          // Level 1: try another healthy key within the same provider first (not for model-wide 404 unless another provider)
+          if (status !== 404 && pool.length > 1 && rotationCount < pool.length * 2) {
             const nextKey = this.pickKey(activeProviderId, activeModelId);
             if (!nextKey.allCooled) {
               rotationCount += 1;
@@ -833,10 +834,17 @@ class Engine {
           }
 
           // Level 2 & 3: spill over to a higher-headroom sibling model or another saved provider
+          triedTargets.add(`${activeProviderId}:${activeModelId}`);
           const candidates = this.listFailoverTargets(activeProviderId, activeModelId);
+          if (status === 404 && activeProviderId === 'nvidia') {
+            candidates.unshift(
+              { provider: 'nvidia', model: 'nvidia/llama-3.1-nemotron-70b-instruct', tier: 'sibling-model' },
+              { provider: 'nvidia', model: 'nv-mistralai/mistral-nemo-12b-instruct', tier: 'sibling-model' },
+            );
+          }
           if (switchCount < 6) {
             const nextCandidate = candidates.find((c) => {
-              if (c.provider === activeProviderId && c.model === activeModelId) return false;
+              if (triedTargets.has(`${c.provider}:${c.model}`)) return false;
               const p = this.pickKey(c.provider, c.model);
               return p.poolSize > 0 && !p.allCooled;
             });

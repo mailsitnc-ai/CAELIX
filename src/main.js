@@ -456,9 +456,13 @@ function registerIpc() {
     if (!pool.length) throw new Error('Paste a key first.');
     let passed = 0;
     let lastErr = null;
+    let testedModel = null;
+    let fallbackFrom = null;
     for (const candidate of pool) {
       try {
-        await testKey(provider, candidate, model);
+        const res = await testKey(provider, candidate, model);
+        testedModel = res?.model || testedModel;
+        fallbackFrom = res?.fallbackFrom || fallbackFrom;
         passed += 1;
       } catch (err) {
         lastErr = err;
@@ -466,9 +470,12 @@ function registerIpc() {
     }
     if (!passed) throw lastErr || new Error('Key test failed.');
     if (pool.length > 1) {
-      return { ok: true, message: passed === pool.length ? `All ${pool.length} keys accepted.` : `${passed}/${pool.length} keys accepted (${lastErr?.message || 'one failed'}).` };
+      return { ok: true, message: passed === pool.length ? `All ${pool.length} keys accepted (${testedModel || 'verified'}).` : `${passed}/${pool.length} keys accepted (${lastErr?.message || 'one failed'}).` };
     }
-    return { ok: true, message: 'Key accepted.' };
+    if (fallbackFrom && testedModel) {
+      return { ok: true, message: `Key accepted (via ${testedModel}; ${fallbackFrom} is unavailable on this account).` };
+    }
+    return { ok: true, message: testedModel ? `Key accepted (${testedModel}).` : 'Key accepted.' };
   });
 
   ipcMain.handle('sessions:list', () => sessions.list());

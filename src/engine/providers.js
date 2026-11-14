@@ -75,7 +75,7 @@ const PROVIDERS = {
       'databricks/dbrx-instruct',
       'ai21labs/jamba-1.5-large-instruct',
     ],
-    defaultModel: 'deepseek-ai/deepseek-v4.1-flash',
+    defaultModel: 'nvidia/llama-3.1-nemotron-70b-instruct',
     color: '#76b900',
   },
   groq: {
@@ -134,7 +134,8 @@ const MODEL_NOTES = {
   'qwen/qwen3-32b': 'Compact coding · Separate Groq bucket',
   'moonshotai/kimi-k2-instruct': 'Long-context tool caller · 128K',
   'openai/gpt-oss-120b': 'Heavy · Eats free TPM quickly',
-  'deepseek-ai/deepseek-v4.1-flash': '40 RPM · No strict free TPM choke',
+  'deepseek-ai/deepseek-v4.1-flash': '40 RPM · Requires NIM Public API access',
+  'nvidia/llama-3.1-nemotron-70b-instruct': '40 RPM · Stable public NIM default',
   'nvidia/nemotron-3.5-lightning-30b-a3b': '40 RPM · Lightweight & fast',
   'nvidia/nemotron-nano-3-30b-a3b': '40 RPM · Lightweight & fast',
   'mistralai/codestral-22b-instruct-v0.1': '40 RPM · Fast compact coder',
@@ -156,7 +157,7 @@ const MODEL_FAILOVER = {
 const PROVIDER_SPILLOVER = ['gemini', 'nvidia', 'openrouter', 'groq'];
 const PROVIDER_HIGH_HEADROOM = {
   gemini: 'gemini-2.5-flash-lite',
-  nvidia: 'deepseek-ai/deepseek-v4.1-flash',
+  nvidia: 'nvidia/llama-3.1-nemotron-70b-instruct',
   openrouter: 'openrouter/free',
   groq: 'meta-llama/llama-4-scout-17b-16e-instruct',
 };
@@ -270,7 +271,7 @@ async function readError(response) {
     // keep raw body
   }
   if (response.status === 404 && /not found for account/i.test(detail)) {
-    detail = `${detail} — Enable "Public API Endpoints" on build.nvidia.com or create a fresh key directly from a model page.`;
+    detail = `${detail} — Model unavailable or account lacks NIM Public API Endpoints. Initialize your cloud profile at cloudaccounts.nvidia.com, switch models (e.g. nvidia/llama-3.1-nemotron-70b-instruct), or email help@build.nvidia.com.`;
   }
   const err = new Error(`Provider returned ${response.status}${detail ? `: ${detail}` : ''}`);
   err.status = response.status;
@@ -461,10 +462,13 @@ async function streamOpenAICompatible(options) {
   }
 }
 
-async function testKey(provider, apiKey, model = null) {
-  const meta = PROVIDERS[provider];
-  if (!meta || !meta.baseUrl) throw new Error('This provider does not use a key.');
-  const targetModel = model || meta.defaultModel;
+const NVIDIA_TEST_FALLBACKS = [
+  'nvidia/llama-3.1-nemotron-70b-instruct',
+  'nv-mistralai/mistral-nemo-12b-instruct',
+  'mistralai/mistral-7b-instruct-v0.3',
+];
+
+async function probeModel(meta, provider, apiKey, targetModel) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
   try {
@@ -484,7 +488,7 @@ async function testKey(provider, apiKey, model = null) {
       signal: controller.signal,
     });
     if (!response.ok) throw await readError(response);
-    return true;
+    return { ok: true, model: targetModel };
   } catch (error) {
     if (error.name === 'AbortError') {
       throw new Error(`${meta.name} (${targetModel}) timed out after 15s during key test.`);
@@ -493,6 +497,29 @@ async function testKey(provider, apiKey, model = null) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function testKey(provider, apiKey, model = null) {
+  const meta = PROVIDERS[provider];
+  if (!meta || !meta.baseUrl) throw new Error('This provider does not use a key.');
+  const targetModel = model || meta.defaultModel;
+  const candidates = provider === 'nvidia'
+    ? [...new Set([targetModel, ...NVIDIA_TEST_FALLBACKS])]
+    : [targetModel];
+  let lastError = null;
+  for (const candidate of candidates) {
+    try {
+      const res = await probeModel(meta, provider, apiKey, candidate);
+      return {
+        ...res,
+        fallbackFrom: candidate !== targetModel ? targetModel : null,
+      };
+    } catch (error) {
+      lastError = error;
+      if (Number(error.status) !== 404) throw error;
+    }
+  }
+  throw lastError;
 }
 
 const MODELS_ENDPOINTS = {
