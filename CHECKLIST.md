@@ -61,7 +61,7 @@ Markers:
 - [x] **Remaining surfaces implemented & checked** — File/image attachments + drag-drop + `@` mentions, inline checkpoints + restore, system prompt inspector, missing-key Send gate, bypass warning banner, Normal/Verbose (`Ctrl+O`), keyboard shortcuts (`Cmd+N`, `Cmd+\`, `Cmd+B`, `Cmd+K`, `Ctrl+O`, `` Ctrl+` ``, `Esc`), desktop notifications when unfocused.
 - [x] **Startup & memory budgets (`< 2000 ms`)**:
   - Source self-check (`env -u ELECTRON_RUN_AS_NODE npm run selfcheck`): `24/24` steps passed, `window 667 ms`, `first paint 93.3 ms`, working set `447 MB`, `0` errors.
-  - Packaged bundle (`dist/CAELIX.app`, `codesign --verify --strict` exit `0`): `24/24` steps passed, `window 468 ms`, `first paint 75.8 ms`, working set `371 MB`, `0` errors.
+  - Packaged bundle (`dist/CAELIX.app`, `codesign --verify --strict` exit `0`): `24/24` steps passed, `window 371 ms`, `first paint 79.7 ms`, working set `457 MB`, `0` errors.
 - [x] **CAELIX branding & Desktop shortcut** — Four-point star SVG/PNG/`.icns` assets used across window, Dock, bundle `Info.plist`, and `/Users/shivam/Desktop/CAELIX.app` (`scripts/package.js`).
 
 ---
