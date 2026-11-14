@@ -1,5 +1,11 @@
 # CAELIX changelog
 
+## 0.1.1 — study screenshots and spec
+
+- Self-check now saves a screenshot for each journey step in `checks/steps/` and requires at least six valid images before it passes.
+- Added `SPEC.md`: the observed harness and Code view, a numbered inventory with an end-to-end test per item, and the three-phase build plan.
+- Saved the CAELIX journey screenshots in `study/screenshots/caelix/` for the visual comparison in phase 3.
+
 ## 0.1.0 — first version
 
 - CAELIX Electron window with the official four-point-star icon (SVG, PNG sizes, `.icns`) used in the window, Dock and About panel.

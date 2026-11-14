@@ -21,9 +21,12 @@ async function run(context) {
   const steps = [];
   const errors = [];
   const consoleErrors = [];
+  const screenshots = [];
   const runStarted = Date.now();
   const screenshotPath = path.join(checksDir, 'selfcheck.png');
+  const stepsDir = path.join(checksDir, 'steps');
   const reportPath = path.join(checksDir, 'selfcheck.json');
+  await fsp.mkdir(stepsDir, { recursive: true });
 
   win.webContents.on('console-message', (event, level, message, line, source) => {
     const modern = typeof event === 'object' && typeof event.level === 'string';
@@ -75,6 +78,21 @@ async function run(context) {
       return true;
     })()`);
     if (!ok) throw new Error(`Could not fill ${selector}`);
+  }
+
+  async function snap(label) {
+    try {
+      const image = await win.webContents.capturePage();
+      const png = image.toPNG();
+      const safe = label.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
+      const file = path.join(stepsDir, `${String(screenshots.length + 1).padStart(2, '0')}-${safe}.png`);
+      await fsp.writeFile(file, png);
+      screenshots.push({ label, path: path.relative(path.join(checksDir, '..'), file), bytes: png.length });
+      return true;
+    } catch (error) {
+      errors.push({ kind: 'step-screenshot', label, message: error.message });
+      return false;
+    }
   }
 
   async function step(name, fn) {
@@ -142,7 +160,8 @@ async function run(context) {
     const fileExists = fs.existsSync(filePath);
     const performanceOk = windowReadyMs !== null && windowReadyMs < 2000 && firstPaintMs !== null && firstPaintMs < 2000;
     const screenshotOk = Boolean(screenshot && screenshot.bytes > 10000);
-    const pass = !forceFail && allStepsOk && allErrors.length === 0 && fileExists && performanceOk && screenshotOk;
+    const stepScreenshotsOk = screenshots.length >= 6 && screenshots.every((item) => item.bytes > 10000);
+    const pass = !forceFail && allStepsOk && allErrors.length === 0 && fileExists && performanceOk && screenshotOk && stepScreenshotsOk;
 
     const report = {
       app: 'CAELIX',
@@ -162,6 +181,8 @@ async function run(context) {
       errors: allErrors,
       screenshot,
       screenshotOk,
+      screenshots,
+      stepScreenshotsOk,
       fileCheck: { path: path.relative(path.join(checksDir, '..'), filePath), exists: fileExists },
       memory,
       pass,
@@ -188,6 +209,7 @@ async function run(context) {
       const info = await evaluate('window.__caelixState.info');
       return `${info.name} ${info.version}`;
     });
+    await snap('empty state');
 
     await step('encrypted key save, mask and delete', async () => {
       await click('#keys-btn');
@@ -209,6 +231,7 @@ async function run(context) {
       await click('#keys-close');
       return detail.status;
     });
+    await snap('keys screen');
 
     await step('choose the keyless simulator model', async () => {
       await click('#model-chip');
@@ -235,6 +258,7 @@ async function run(context) {
       if (firstWordMs > 4000) throw new Error(`First words took ${firstWordMs} ms`);
       return `${firstWordMs} ms to first words`;
     });
+    await snap('streaming reply');
 
     await step('answer a permission card and write a real file', async () => {
       await waitFor('document.querySelector("#permission-allow")', 12000, 'permission card');
@@ -249,6 +273,7 @@ async function run(context) {
       if (!content.includes('CAELIX self-check')) throw new Error('The note content is wrong.');
       return 'caelix-note.md written and shown in Changes';
     });
+    await snap('changes after permission');
 
     await step('finish the streamed turn', async () => {
       await waitFor('window.__caelixState.streaming === false', 20000, 'turn complete');
@@ -265,6 +290,7 @@ async function run(context) {
       await waitFor('document.querySelector("#terminal").textContent.includes("caelix-terminal-ok")', 10000, 'terminal output');
       return 'terminal echoed caelix-terminal-ok';
     });
+    await snap('terminal');
 
     await step('rename the chat and switch mode', async () => {
       await click('#chat-title-btn');
@@ -282,6 +308,7 @@ async function run(context) {
       await waitFor('document.querySelector("#mode-chip").textContent === "Accept edits"', 4000, 'accept mode');
       return 'renamed and modes switched';
     });
+    await snap('renamed and mode');
 
     await step('collapse and restore the right panel', async () => {
       await click('#panel-toggle');
@@ -301,6 +328,7 @@ async function run(context) {
       if (messages < 2) throw new Error('The conversation did not come back after reload.');
       return `${messages} messages restored`;
     });
+    await snap('restored after reload');
   } catch (error) {
     errors.push({ kind: 'outer', message: error.message, stack: error.stack });
   }
