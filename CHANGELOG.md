@@ -1,5 +1,10 @@
 # CAELIX changelog
 
+## 0.1.8 — end-to-end verification checklist and release polish
+
+- Added `CHECKLIST.md` auditing every `features.md` and `SPEC.md` item with verified CLI, harness, source Electron self-check, and packaged `CAELIX.app` measurements and honest external blockers.
+- Verified headless CLI (`--help`, `tools`, `doctor`, `run` across `ask`/`accept`/`plan` modes), mid-stream cancellation, bounded `429`/`5xx` HTTP retries, `>100k`-token compaction, `CAELIX.md` `@import` traversal protection, and `.ipynb` `notebook_edit` actions via `checks/verify_features.js`.
+
 ## 0.1.7 — full 19-tool harness, multimodal inputs, themes and keyboard shortcuts
 
 - Added `web_search`, `notebook_edit` (`.ipynb` cell replace/insert/delete), `skill` (`SKILLS.md` / `.agents/skills/*/SKILL.md` / `CAELIX.md`), and base64 image reading in `read_file` with multimodal provider forwarding and hidden internal image carrier messages (19 tools total).
