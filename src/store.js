@@ -194,6 +194,7 @@ class SessionStore {
       provider: input.provider || 'gemini',
       model: input.model || 'gemini-2.5-flash',
       mode: input.mode || 'ask',
+      contextOffset: 0,
       messages: [],
       changes: [],
       terminal: [],

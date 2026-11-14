@@ -596,7 +596,14 @@ function renderTranscript() {
   for (const message of session.messages) {
     if (message.role === 'tool') results.set(message.toolCallId, message);
   }
-  for (const message of session.messages) {
+  for (let idx = 0; idx < session.messages.length; idx += 1) {
+    if (session.contextOffset && idx === session.contextOffset) {
+      const divider = document.createElement('div');
+      divider.className = 'context-reset-divider';
+      divider.innerHTML = '<span>Context reset — fresh memory starts here</span>';
+      transcript.appendChild(divider);
+    }
+    const message = session.messages[idx];
     if (message.role === 'tool' || message.hidden) continue;
     if (message.role === 'user') {
       transcript.appendChild(buildUserMessageNode(message.content, message.attachments));
@@ -625,6 +632,12 @@ function renderTranscript() {
       transcript.appendChild(node);
     }
   }
+  if (session.contextOffset && session.contextOffset >= session.messages.length) {
+    const divider = document.createElement('div');
+    divider.className = 'context-reset-divider';
+    divider.innerHTML = '<span>Context reset — fresh memory starts here</span>';
+    transcript.appendChild(divider);
+  }
   scrollToBottom(true);
 }
 
@@ -651,6 +664,23 @@ function renderChanges() {
   }
 }
 
+async function resetCurrentChatContext() {
+  if (!state.session) return;
+  if (state.streaming) {
+    toast('Stop the current reply before resetting context.');
+    return;
+  }
+  const res = await api.invoke('chat:reset', { sessionId: state.session.id });
+  state.session = await api.invoke('sessions:get', state.session.id);
+  state.contextReport = res.report || await api.invoke('context:get', { sessionId: state.session.id }).catch(() => null);
+  state.lastUsageText = '';
+  renderTodos([]);
+  renderTranscript();
+  renderContext();
+  renderStatusStrip();
+  toast(`Chat context reset (${res.beforeTokens.toLocaleString()} → ${res.afterTokens.toLocaleString()} tokens).`);
+}
+
 function renderContext() {
   const node = $('#context-report');
   if (!node) return;
@@ -668,7 +698,7 @@ function renderContext() {
   node.innerHTML = `
     <div class="context-total">
       <span class="context-number">${report.total.toLocaleString()}</span>
-      <span class="context-unit">of ${report.limit.toLocaleString()} tokens</span>
+      <span class="context-unit">of ${report.limit.toLocaleString()} chat window</span>
       <span class="context-percent">${report.percent}%</span>
     </div>
     <div class="context-bar"><span style="width:${Math.max(1, Math.min(100, report.percent))}%"></span></div>
@@ -680,7 +710,11 @@ function renderContext() {
           <span class="context-value">${value.toLocaleString()}</span>
         </div>`).join('')}
     </div>
-    <div class="context-foot">${report.messages} saved message(s) in this chat.</div>`;
+    <div class="context-foot">${report.messages} active message(s) in AI memory${report.savedMessages > report.messages ? ` · ${report.savedMessages} kept in scroll` : ''}. Not an account limit.</div>
+    <div class="context-actions-row">
+      <button type="button" id="context-reset-btn" class="context-action-btn" title="Clear AI memory in this chat without starting a new chat (/reset)">Reset chat context (/reset)</button>
+    </div>`;
+  $('#context-reset-btn', node)?.addEventListener('click', () => { resetCurrentChatContext().catch((err) => toast(err.message)); });
   if (state.promptOpen) loadPromptInspector().catch(() => {});
 }
 
@@ -1426,6 +1460,7 @@ function onChatEvent(event) {
 
 const SLASH_COMMANDS = [
   { name: '/compact', args: '[focus]', desc: 'Summarize older messages to save context tokens' },
+  { name: '/reset', args: '', desc: 'Reset this chat\'s AI memory to 0% without starting a new chat' },
   { name: '/btw', args: '<question>', desc: 'Ask an ephemeral side question without saving to history' },
   { name: '/chat', args: '', desc: 'Switch workspace to Chat mode (MCP, Skills, Hooks & Agents stay active)' },
   { name: '/code', args: '', desc: 'Switch workspace to Code mode with Changes, Terminal & folder picker' },
@@ -1591,6 +1626,10 @@ async function runSlashCommand(raw) {
       state.contextReport = await api.invoke('context:get', { sessionId: state.session.id }).catch(() => null);
       renderAll();
       appendInlineNote('Compacted context', `Compacted **${res.compactedCount}** older message(s) (${res.beforeTokens.toLocaleString()} → ${res.afterTokens.toLocaleString()} tokens).\n\n${res.summary}`);
+      return true;
+    }
+    case '/reset': {
+      await resetCurrentChatContext();
       return true;
     }
     case '/btw': {

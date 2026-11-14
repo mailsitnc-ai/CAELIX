@@ -293,17 +293,33 @@ class Engine {
     ].filter(Boolean).join('\n');
   }
 
+  activeMessages(session) {
+    const all = Array.isArray(session?.messages) ? session.messages : [];
+    const offset = Math.max(0, Math.min(all.length, Number(session?.contextOffset) || 0));
+    return all.slice(offset);
+  }
+
+  contextLimit(session) {
+    const provider = session?.provider;
+    const model = String(session?.model || '').toLowerCase();
+    if (provider === 'gemini') return 1000000;
+    if (provider === 'openrouter' && model.includes('gemini')) return 1000000;
+    if (provider === 'groq') return 128000;
+    return 200000;
+  }
+
   contextReport(session) {
     const system = estimateTokens(this.systemPrompt(session));
     let messageTokens = 0;
     let toolTokens = 0;
-    for (const message of session.messages || []) {
+    const active = this.activeMessages(session);
+    for (const message of active) {
       const tokens = estimateTokens(message.content || '');
       if (message.role === 'tool') toolTokens += tokens;
       else messageTokens += tokens;
     }
     const total = system + messageTokens + toolTokens;
-    const limit = 200000;
+    const limit = this.contextLimit(session);
     return {
       systemTokens: system,
       messageTokens,
@@ -311,12 +327,14 @@ class Engine {
       total,
       limit,
       percent: Math.min(100, Math.round((total / limit) * 1000) / 10),
-      messages: (session.messages || []).length,
+      messages: active.length,
+      savedMessages: (session?.messages || []).length,
+      contextOffset: Math.max(0, Math.min((session?.messages || []).length, Number(session?.contextOffset) || 0)),
     };
   }
 
   buildConversation(session, incoming) {
-    const merged = [...(session.messages || []), ...(incoming || [])]
+    const merged = [...this.activeMessages(session), ...(incoming || [])]
       .filter((message) => message && (message.role === 'user' || message.role === 'assistant' || message.role === 'tool'));
     const slice = merged.slice(-60);
     let toolSeenFromEnd = 0;
@@ -871,10 +889,37 @@ class Engine {
     }
   }
 
+  resetContext(sessionId) {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error('That chat no longer exists.');
+    if (this.controllers.has(sessionId)) throw new Error('Stop the running reply before resetting context.');
+    const beforeReport = this.contextReport(session);
+    const nextOffset = Array.isArray(session.messages) ? session.messages.length : 0;
+    if (typeof this.sessions.update === 'function') {
+      this.sessions.update(sessionId, { contextOffset: nextOffset, todos: [] });
+    } else {
+      session.contextOffset = nextOffset;
+      session.todos = [];
+    }
+    this.allowances.delete(sessionId);
+    const afterSession = this.sessions.get(sessionId);
+    const afterReport = this.contextReport(afterSession);
+    this.emit({ sessionId, type: 'context', report: afterReport, reset: true });
+    return {
+      beforeTokens: beforeReport.total,
+      afterTokens: afterReport.total,
+      archivedMessages: nextOffset,
+      report: afterReport,
+    };
+  }
+
   async compactSession(sessionId, focus = '') {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error('That chat no longer exists.');
-    const all = Array.isArray(session.messages) ? session.messages : [];
+    const full = Array.isArray(session.messages) ? session.messages : [];
+    const offset = Math.max(0, Math.min(full.length, Number(session.contextOffset) || 0));
+    const archived = full.slice(0, offset);
+    const all = full.slice(offset);
     if (all.length <= 4) {
       return {
         beforeTokens: this.contextReport(session).total,
@@ -939,11 +984,12 @@ class Engine {
       content: `[Compacted context summary]\n${summaryText}`,
       createdAt: Date.now(),
     };
-    const nextMessages = [summaryMsg, ...tail];
+    const nextMessages = [...archived, summaryMsg, ...tail];
     if (typeof this.sessions.update === 'function') {
-      this.sessions.update(sessionId, { messages: nextMessages });
+      this.sessions.update(sessionId, { messages: nextMessages, contextOffset: archived.length });
     } else {
       session.messages = nextMessages;
+      session.contextOffset = archived.length;
     }
     const afterSession = this.sessions.get(sessionId);
     const afterReport = this.contextReport(afterSession);

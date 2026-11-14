@@ -1,6 +1,8 @@
 # CAELIX changelog
 
-## 0.1.9 (Rate-limit key rotation, permission safety, Copy buttons & Task Summaries)
+## 0.1.9 (Rate-limit key rotation, permission safety, Copy buttons, Task Summaries & `/reset`)
+
+- Added **`/reset` command** and **`Reset chat context (/reset)`** button in the Context panel: wipes the AI's active memory for only the current chat (`contextOffset` advances past prior messages, active `todos` clear, active message/tool tokens drop to `0`) and draws a persistent `"Context reset — fresh memory starts here"` divider while keeping old messages visible in your chat scroll. Also updated the Context meter to show the model/provider's true chat window size (`1,000,000` for Gemini, `128,000` for Groq, `200,000` default) labeled `chat window` and `Not an account limit.`.
 
 - Added **multi-key API rotation pools** (`src/store.js` `KeyStore`, `src/engine/index.js` `Engine.pickKey`/`callKeyed`, Keys modal `+ Add` & comma-separated paste + key chips): save 3–12 API keys per provider so hitting `429` (or quota/auth errors) switches immediately to the next healthy key with `0 ms` delay before falling back to countdown sleep when all keys are cooling down.
 - Added curated **lightweight, long-context models** (`meta-llama/llama-4-scout-17b-16e-instruct` Groq default, `llama-3.1-8b-instant`, `qwen/qwen3-32b`, `moonshotai/kimi-k2-instruct`, Gemini `gemini-2.5-flash-lite` / `flash`, NVIDIA `nemotron-3.5-lightning-30b-a3b`) with capability hints in the Model menu, normalized hallucinated OpenAI/Harmony tool aliases (`repo_browser.list_dir` -> `list_dir`, `open_file` -> `read_file`, etc.), and trimmed older tool results (`> 4` turns old) before sending to avoid blowing free-tier TPM limits.
