@@ -97,6 +97,27 @@ const PROVIDERS = {
     defaultModel: 'openai/gpt-oss-20b',
     color: '#f55036',
   },
+  coarena: {
+    id: 'coarena',
+    name: 'Coarena',
+    keyLabel: 'Coarena API key',
+    consoleUrl: 'https://coarena.ai/account/api',
+    baseUrl: 'https://coarena.ai/api/v1/chat/completions',
+    models: [
+      'gpt-6-1-sol',
+      'gpt-6-1-terra',
+      'gpt-6-astra',
+      'gpt-6-luna',
+      'gemini-4-carbon',
+      'gemini-4-argon',
+      'gemini-3-8-flash',
+      'deepseek-v4-1-flash-1017',
+      'grok-4-7',
+      'kimi-k3-1-pro',
+    ],
+    defaultModel: 'gpt-6-1-sol',
+    color: '#06b6d4',
+  },
   omniroute: {
     id: 'omniroute',
     name: 'OmniRoute',
@@ -174,6 +195,16 @@ const MODEL_NOTES = {
   'meta-llama/llama-3.3-70b-instruct:free': 'Free · Strong general & code',
   'google/gemma-3-27b-it:free': 'Free · Fast lightweight backup',
   'google/gemini-2.5-flash': 'Paid credits · Lightweight · 1M context',
+  'gpt-6-1-sol': 'Coarena · OpenAI · 128k context · Vision & tools',
+  'gpt-6-1-terra': 'Coarena · OpenAI · 128k context · Vision & tools',
+  'gpt-6-astra': 'Coarena · OpenAI · 128k context · Vision & tools',
+  'gpt-6-luna': 'Coarena · OpenAI · 128k context · Vision & tools',
+  'gemini-4-carbon': 'Coarena · Google · 128k context · Vision & tools',
+  'gemini-4-argon': 'Coarena · Google · 128k context · Vision & tools',
+  'gemini-3-8-flash': 'Coarena · Google · 128k context · Fast vision & tools',
+  'deepseek-v4-1-flash-1017': 'Coarena · DeepSeek · 128k context · Tools & reasoning',
+  'grok-4-7': 'Coarena · xAI · 128k context · Vision & tools',
+  'kimi-k3-1-pro': 'Coarena · Moonshot · 128k context · Vision & tools',
 };
 
 // Providers whose models carry separate RPM/TPM/RPD quota buckets.
@@ -315,6 +346,22 @@ function friendlyDetail(provider, status, detail) {
     }
     if (/api key not valid|api_key_invalid/i.test(text)) {
       return 'Google rejected the Gemini API key. Check the key at https://aistudio.google.com/apikey or save a new one in Keys.';
+    }
+  }
+  if (provider === 'coarena') {
+    if (status === 401) {
+      return 'Coarena rejected the API key. Copy or create an active key at https://coarena.ai/account/api and save it here in Keys.';
+    }
+    if (status === 403) {
+      if (/terms/i.test(text)) {
+        return 'Coarena requires accepting its Model API terms once at https://coarena.ai/account/api before this key can run models.';
+      }
+      if (/scope/i.test(text)) {
+        return 'This Coarena key is missing the inference:write scope. Generate a key with inference access at https://coarena.ai/account/api.';
+      }
+    }
+    if (status === 429) {
+      return `${text ? `${text} — ` : ''}Coarena free daily usage ($5/day) or rate limit reached. Request a higher limit in Coarena or switch models/providers.`;
     }
   }
   return text;
@@ -545,6 +592,13 @@ const NVIDIA_TEST_FALLBACKS = [
   'mistralai/mistral-large-4-1t-a52b',
 ];
 
+const COARENA_TEST_FALLBACKS = [
+  'gpt-6-1-sol',
+  'gpt-6-astra',
+  'gemini-4-carbon',
+  'gemini-3-8-flash',
+];
+
 async function probeModel(meta, provider, apiKey, targetModel) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
@@ -623,7 +677,9 @@ async function testKey(provider, apiKey, model = null) {
   const targetModel = model || meta.defaultModel;
   const candidates = provider === 'nvidia'
     ? [...new Set([targetModel, ...NVIDIA_TEST_FALLBACKS])]
-    : [targetModel];
+    : provider === 'coarena'
+      ? [...new Set([targetModel, ...COARENA_TEST_FALLBACKS])]
+      : [targetModel];
   let lastError = null;
   for (const candidate of candidates) {
     try {
@@ -638,7 +694,7 @@ async function testKey(provider, apiKey, model = null) {
       // Key-level failures stop the probe at once; model-level ones (404 not
       // on this account, or a model that hangs) just move to the next candidate.
       const keyLevel = status === 401 || status === 402 || status === 403;
-      const modelLevel = status === 404 || status === 408;
+      const modelLevel = status === 404 || status === 408 || (provider === 'coarena' && status === 503);
       if (keyLevel || !modelLevel) throw error;
     }
   }
@@ -649,6 +705,7 @@ const MODELS_ENDPOINTS = {
   openrouter: 'https://openrouter.ai/api/v1/models',
   nvidia: 'https://integrate.api.nvidia.com/v1/models',
   groq: 'https://api.groq.com/openai/v1/models',
+  coarena: 'https://coarena.ai/api/v1/models',
   omniroute: 'http://localhost:20128/v1/models',
 };
 
@@ -696,10 +753,15 @@ async function fetchProviderModels(provider, apiKey) {
     if (!response.ok) throw await readError(response, provider);
     const data = await response.json();
     const exclude = MODEL_EXCLUDES[provider];
-    const ids = (data.data || [])
+    const rows = Array.isArray(data.data) ? data.data : [];
+    const activeRows = provider === 'coarena'
+      ? rows.filter((item) => !item.lifecycle || item.lifecycle === 'active')
+      : rows;
+    const ids = activeRows
       .map((item) => item.id)
       .filter((id) => Boolean(id) && (!exclude || !exclude.test(id)));
-    return ids.length ? [...new Set([...meta.models, ...ids])].slice(0, 400) : meta.models;
+    if (!ids.length) return meta.models;
+    return (provider === 'coarena' ? ids : [...new Set([...meta.models, ...ids])]).slice(0, 400);
   } finally {
     clearTimeout(timer);
   }

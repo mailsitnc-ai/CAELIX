@@ -488,6 +488,7 @@ class Engine {
 
   contextLimit(session) {
     const provider = session?.provider;
+    if (provider === 'coarena') return 128000;
     if (provider === 'groq') return 1000000;
     return 2000000;
   }
@@ -1057,18 +1058,19 @@ class Engine {
         const isKeyAuthOrQuota = isRateLimit || status === 401 || status === 402 || status === 403 || status === 404;
         const isNvidiaStall = activeProviderId === 'nvidia'
           && (status === 408 || /did not respond within/i.test(error.message));
+        const isCoarenaUnavailable = activeProviderId === 'coarena' && (status === 404 || status === 503);
         const retryable = isRateLimit || status === 408 || status >= 500
           || /fetch failed|network|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(error.message);
         const fast = process.env.CAELIX_FAST_RETRY === '1';
 
-        if ((isKeyAuthOrQuota || isNvidiaStall) && !emitted) {
+        if ((isKeyAuthOrQuota || isNvidiaStall || isCoarenaUnavailable) && !emitted) {
           const coolMs = fast ? 120 : (isRateLimit ? (error.retryAfterMs || 60_000) : 300_000);
           const scope = isRateLimit && MODEL_FAILOVER[activeProviderId] ? 'model' : 'key';
           // A stall is a model problem, not a key problem: never cool the key down for it.
-          if (!isNvidiaStall && status !== 404) this.markKeyCooldown(activeProviderId, picked.index, coolMs, activeModelId, scope);
+          if (!isNvidiaStall && !isCoarenaUnavailable && status !== 404) this.markKeyCooldown(activeProviderId, picked.index, coolMs, activeModelId, scope);
 
           // Level 1: try another healthy key within the same provider first (not for model-wide 404 or a stall)
-          if (!isNvidiaStall && status !== 404 && pool.length > 1 && rotationCount < pool.length * 2) {
+          if (!isNvidiaStall && !isCoarenaUnavailable && status !== 404 && pool.length > 1 && rotationCount < pool.length * 2) {
             const nextKey = this.pickKey(activeProviderId, activeModelId);
             if (!nextKey.allCooled) {
               rotationCount += 1;
@@ -1092,6 +1094,10 @@ class Engine {
               { provider: 'nvidia', model: 'nvidia/nemotron-3.5-super-vl-120b-a12b', tier: 'sibling-model' },
               { provider: 'nvidia', model: 'nvidia/nemotron-3-ultra-550b-a55b', tier: 'sibling-model' },
             );
+          } else if (isCoarenaUnavailable) {
+            for (const alt of (PROVIDERS.coarena?.models || []).slice(0, 4).reverse()) {
+              if (alt !== activeModelId) candidates.unshift({ provider: 'coarena', model: alt, tier: 'sibling-model' });
+            }
           }
           if (switchCount < 6) {
             const nextCandidate = candidates.find((c) => {

@@ -1,5 +1,11 @@
 # CAELIX changelog
 
+## 0.1.21 — Built-in Coarena provider and active frontier model catalog
+
+- **Coarena provider (`src/engine/providers.js`, `src/engine/index.js`, `src/renderer/app.js`, `src/cli.js`):** Added **Coarena** (`https://coarena.ai/api/v1/chat/completions`, key page `https://coarena.ai/account/api`, public live catalog `https://coarena.ai/api/v1/models`, CLI env `COARENA_API_KEY`) as a first-class provider in CAELIX with all active frontier models pre-configured (`gpt-6-1-sol`, `gpt-6-1-terra`, `gpt-6-astra`, `gpt-6-luna`, `gemini-4-carbon`, `gemini-4-argon`, `gemini-3-8-flash`, `deepseek-v4-1-flash-1017`, `grok-4-7`, `kimi-k3-1-pro`).
+- **Tailored context, error hints, and failover (`src/engine/providers.js`, `src/engine/index.js`):** Configured Coarena's `128,000` token context limit so auto-`/reset` stays inside window, active-lifecycle model catalog sync (so newly added or re-enabled models appear on Refresh without needing a code edit), plain-language `401`/`403`/`429` messages, key-test fallback across active Coarena models, and automatic spillover to configured Gemini/NVIDIA/OpenRouter/Groq keys if Coarena reaches its daily `$5` limit.
+- **Verified:** Verified live Coarena model catalog sync, added mock Coarena key-probe + streaming + tool-call + `128k` context checks to `checks/verify_features.js`, added Coarena Keys modal & catalog checks to `src/selfcheck.js`, rebuilt `dist/CAELIX.app` (`0.1.21`), and ran `doctor`, `verify_features.js`, `terminal-probe.js`, and `selfcheck`.
+
 ## 0.1.20 — Lazy ToolSearch MCP loading & Code-only higher turn budgets
 
 - **Lazy `ToolSearch` MCP loading (`src/engine/mcp.js`, `src/engine/index.js`, `src/renderer/app.js`):** Added `McpManager.searchTools()` and dynamic `tool_search` loading when more than 10 MCP tools are connected (such as REA's large toolset). Instead of injecting 100+ schemas on every request, CAELIX keeps only `tool_search` plus matched tools loaded per chat, displays a compact deferred-catalog summary in the system prompt, renders `Tool Search` cards cleanly, and preserves `23` built-in CLI tools.

@@ -563,8 +563,11 @@ async function run(context) {
       if (nvidiaModels < 30) throw new Error(`Expected >= 30 NVIDIA models, got ${nvidiaModels}`);
       const groqModels = await evaluate('window.__caelixState.providers.find(p => p.id === "groq")?.models?.length || 0');
       if (groqModels < 4) throw new Error(`Expected >= 4 Groq models, got ${groqModels}`);
+      const coarenaModels = await evaluate('window.__caelixState.providers.find(p => p.id === "coarena")?.models?.length || 0');
+      if (coarenaModels < 10) throw new Error(`Expected >= 10 Coarena models, got ${coarenaModels}`);
       await click('#keys-btn');
       await waitFor('!!document.querySelector("#key-input-groq")', 3000, 'groq key input in Keys modal');
+      await waitFor('!!document.querySelector("#key-input-coarena")', 3000, 'coarena key input in Keys modal');
       await click('#keys-close');
 
       // Slash commands menu + /help + /btw + /compact
