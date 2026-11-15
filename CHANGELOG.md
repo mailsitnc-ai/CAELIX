@@ -1,5 +1,13 @@
 # CAELIX changelog
 
+## 0.1.13 — OmniRoute as a managed local gateway provider
+
+- New provider **OmniRoute** (www.omniroute.online): one OpenAI-compatible endpoint on localhost:20128 that routes across 352 providers with automatic fallback, quota pooling and circuit breakers. Verified live before adding: gateway up, key test, 475-model catalog, SSE streaming and `auto` routing all probed against a real gateway (20-check suite extended to cover the catalog, friendly failures and the model-refresh path).
+- **No terminal needed:** CAELIX owns the helper's lifecycle. The first time an OmniRoute model is used or tested, `src/omniroute.js` launches the `omniroute` CLI as a managed child process (global bin first, `npx` fallback), waits bounded for port 20128, reuses it, and shuts it down on quit. Concurrent callers share one startup; crashes relaunch on next use; stdout/stderr land in `userData/logs/omniroute-helper.log`.
+- Keys: the OmniRoute **gateway key** (from its dashboard → Endpoints) is stored in CAELIX's encrypted KeyStore like any other provider. `testKey` for omniroute probes `GET /v1/models` — proves key + helper without spending upstream tokens. Friendly errors for helper-not-running and invalid gateway key (401).
+- Model picker: curated `auto` family (`auto`, `auto/coding`, `auto/fast`, `auto/cheap`, `auto/smart`) with honest notes; live Refresh pulls the real catalog (400 newest entries kept).
+- Verified: `ALL 20 FEATURE VERIFICATIONS PASSED` (new OmniRoute check included), 25-step self-check passes (0 errors), and `checks/omniroute-e2e.js` drives the whole chain through CAELIX's own code — spawn (6.1 s), key test, live model refresh, streamed chat via `auto` (770 ms), clean shutdown with the port confirmed closed.
+
 ## 0.1.12 — Groq catalog refresh after provider rotation
 
 - Live probing with a real stored Groq key showed Groq rotated its model catalog: `meta-llama/llama-4-scout-17b-16e-instruct`, `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `qwen/qwen3-32b`, `kimi-k2-instruct` and `groq/compound` now return `404` and no longer exist on current keys. The curated Groq list is rebuilt around the four models the catalog endpoint returns today, each verified streaming live (79-316 ms first reply): `openai/gpt-oss-20b` (new default), `qwen/qwen3.8-27b` (fastest, new high-headroom spillover target), `openai/gpt-oss-120b`, `allam-2-7b`. Quota-failover chains and `MODEL_NOTES` updated; rotated-out IDs are marked honestly in the notes.

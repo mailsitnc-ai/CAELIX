@@ -14,6 +14,7 @@ const { McpManager } = require('./engine/mcp');
 const { HooksManager } = require('./engine/hooks');
 const { AgentRegistry } = require('./engine/agents');
 const { providerList, testKey, fetchProviderModels, PROVIDERS } = require('./engine/providers');
+const omnirouteHelper = require('./omniroute');
 
 const PROCESS_STARTED = Date.now();
 const APP_NAME = 'CAELIX';
@@ -462,6 +463,9 @@ function registerIpc() {
   ipcMain.handle('keys:test', async (_event, { provider, key, model }) => {
     const pool = key ? [String(key).trim()] : keys.list(provider);
     if (!pool.length) throw new Error('Paste a key first.');
+    // OmniRoute needs its helper alive before a gateway key means anything;
+    // this is the one place CAELIX launches it outside of a chat send.
+    if (provider === 'omniroute') await omnirouteHelper.ensure(app.getPath('userData'));
     let passed = 0;
     let lastErr = null;
     let testedModel = null;
@@ -553,12 +557,19 @@ function registerIpc() {
       sessions.rename(sessionId, title);
       emit({ type: 'session-updated', session: sessionSummary(sessions.get(sessionId)) });
     }
-    engine.send(sessionId, text, attachments).catch((error) => {
+    const dispatch = () => engine.send(sessionId, text, attachments).catch((error) => {
       emit({ type: 'error', message: error.message });
     });
+    // The OmniRoute helper is launched on first use so no terminal is needed.
+    if (session.provider === 'omniroute') {
+      omnirouteHelper.ensure(app.getPath('userData'))
+        .then(dispatch)
+        .catch((error) => emit({ type: 'error', message: error.message }));
+    } else {
+      dispatch();
+    }
     return { started: true };
   });
-
   ipcMain.handle('chat:stop', (_event, sessionId) => {
     cancelSessionPrompts(sessionId);
     engine.stop(sessionId);
@@ -753,6 +764,7 @@ if (!gotLock && !SELF_CHECK) {
   });
   app.on('before-quit', () => {
     try { engine?.dispose(); } catch { /* best effort */ }
+    try { omnirouteHelper.stop(); } catch { /* best effort */ }
   });
   process.on('uncaughtException', (error) => {
     lastError = { message: error.message, stack: error.stack, at: new Date().toISOString() };

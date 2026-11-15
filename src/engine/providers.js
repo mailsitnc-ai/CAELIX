@@ -97,6 +97,25 @@ const PROVIDERS = {
     defaultModel: 'openai/gpt-oss-20b',
     color: '#f55036',
   },
+  omniroute: {
+    id: 'omniroute',
+    name: 'OmniRoute',
+    keyLabel: 'OmniRoute gateway key',
+    consoleUrl: 'http://localhost:20128/dashboard',
+    baseUrl: 'http://localhost:20128/v1/chat/completions',
+    // The `auto` family always exists; prefixed IDs (groq/…, nvidia/…) appear
+    // once the matching connections are added in the OmniRoute dashboard.
+    // Refresh in the model picker pulls the real live list.
+    models: [
+      'auto',
+      'auto/coding',
+      'auto/fast',
+      'auto/cheap',
+      'auto/smart',
+    ],
+    defaultModel: 'auto',
+    color: '#8b5cf6',
+  },
   claude: {
     id: 'claude',
     name: 'Claude Code (installed CLI)',
@@ -136,6 +155,11 @@ const MODEL_NOTES = {
   'openai/gpt-oss-120b': 'Heavy · Eats free TPM quickly',
   'openai/gpt-oss-20b': 'Fast tool caller · Good free TPM',
   'allam-2-7b': 'Lightweight fallback · Verified live',
+  'auto': 'OmniRoute router · Falls back across your connected providers',
+  'auto/coding': 'OmniRoute · Coding objective',
+  'auto/fast': 'OmniRoute · Speed objective',
+  'auto/cheap': 'OmniRoute · Cheapest eligible first',
+  'auto/smart': 'OmniRoute · Quality objective',
   'deepseek-ai/deepseek-v4.1-flash': 'Hangs on many accounts · Key test moves on after it stalls',
   'nvidia/llama-3.1-nemotron-70b-instruct': '40 RPM · Not on all NIM accounts',
   'nvidia/nemotron-3.5-lightning-30b-a3b': '40 RPM · Verified live · Lightweight & fast',
@@ -282,6 +306,9 @@ function unwrapJson(value, depth = 0) {
 // Turn the most common hard-to-read provider rejections into plain next steps.
 function friendlyDetail(provider, status, detail) {
   const text = String(detail || '');
+  if (provider === 'omniroute' && status === 401) {
+    return 'That is not a valid OmniRoute gateway key. Open the OmniRoute dashboard at http://localhost:20128/dashboard, go to Endpoints, copy the key, and save it here in Keys.';
+  }
   if (provider === 'gemini' && status === 403) {
     if (/billing/i.test(text)) {
       return 'Billing is not enabled on the Google project behind this key, so every Gemini model is refused. Free-tier Gemini calls need billing enabled once: open https://console.cloud.google.com/billing, enable it for the project that issued the key, then click Test in Keys. Or switch model or provider.';
@@ -547,9 +574,48 @@ async function probeModel(meta, provider, apiKey, targetModel) {
   }
 }
 
+// Fetch errors from a local helper carry an ECONNREFUSED cause chain; raw
+// "fetch failed" is useless to a user, so translate it.
+function connectionMessage(error, helperName, startHint) {
+  let cur = error;
+  while (cur) {
+    if (cur.code === 'ECONNREFUSED' || cur?.cause?.code === 'ECONNREFUSED') {
+      return `${helperName} is not running. ${startHint}`;
+    }
+    cur = cur.cause;
+  }
+  return error.message;
+}
+
+const OMNIROUTE_START_HINT = 'CAELIX starts it automatically the first time you send a message with an OmniRoute model — or run `npx omniroute` in a terminal. Connect providers once in its dashboard at http://localhost:20128/dashboard.';
+
 async function testKey(provider, apiKey, model = null) {
   const meta = PROVIDERS[provider];
   if (!meta || !meta.baseUrl) throw new Error('This provider does not use a key.');
+  // The gateway itself is what a gateway key unlocks: a cheap GET /v1/models
+  // proves key and helper without spending any upstream tokens.
+  if (provider === 'omniroute') {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const response = await fetch('http://localhost:20128/v1/models', {
+        headers: { authorization: `Bearer ${apiKey}` },
+        signal: controller.signal,
+      });
+      if (!response.ok) throw await readError(response, provider);
+      return { ok: true, model: 'gateway' };
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        const err = new Error('OmniRoute did not answer within 8s — it may still be starting. Try again in a moment.');
+        err.status = 408;
+        throw err;
+      }
+      error.message = connectionMessage(error, 'OmniRoute', OMNIROUTE_START_HINT);
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
   const targetModel = model || meta.defaultModel;
   const candidates = provider === 'nvidia'
     ? [...new Set([targetModel, ...NVIDIA_TEST_FALLBACKS])]
@@ -579,6 +645,7 @@ const MODELS_ENDPOINTS = {
   openrouter: 'https://openrouter.ai/api/v1/models',
   nvidia: 'https://integrate.api.nvidia.com/v1/models',
   groq: 'https://api.groq.com/openai/v1/models',
+  omniroute: 'http://localhost:20128/v1/models',
 };
 
 const MODEL_EXCLUDES = {
@@ -590,8 +657,8 @@ async function fetchProviderModels(provider, apiKey) {
   const meta = PROVIDERS[provider];
   if (!meta) throw new Error(`Unknown provider: ${provider}`);
   if (meta.keyless) return meta.models;
-  if ((provider === 'gemini' || provider === 'groq') && !apiKey) {
-    throw new Error(`Add a ${meta.name} key first to refresh models.`);
+  if ((provider === 'gemini' || provider === 'groq' || provider === 'omniroute') && !apiKey) {
+    throw new Error(`Add ${/^[AEIOU]/.test(meta.name) ? 'an' : 'a'} ${meta.name} key first to refresh models.`);
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
@@ -611,10 +678,17 @@ async function fetchProviderModels(provider, apiKey) {
     }
     const url = MODELS_ENDPOINTS[provider];
     const headers = apiKey ? { authorization: `Bearer ${apiKey}` } : {};
-    const response = await fetch(url, {
-      headers,
-      signal: controller.signal,
-    });
+    let response;
+    try {
+      response = await fetch(url, {
+        headers,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error.name === 'AbortError') throw error;
+      error.message = connectionMessage(error, meta.name, OMNIROUTE_START_HINT);
+      throw error;
+    }
     if (!response.ok) throw await readError(response, provider);
     const data = await response.json();
     const exclude = MODEL_EXCLUDES[provider];
