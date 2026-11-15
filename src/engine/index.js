@@ -33,6 +33,45 @@ function estimateTokens(text) {
   return Math.max(1, Math.round(String(text || '').length / 4));
 }
 
+function cleanChatTitle(raw) {
+  let line = String(raw || '')
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .split(/\r?\n/)
+    .map((part) => part.trim())
+    .find((part) => Boolean(part)) || '';
+  line = line
+    .replace(/^title\s*:\s*/i, '')
+    .replace(/^["'`*#>-]+/, '')
+    .replace(/["'`*]+$/, '')
+    .replace(/[.!?]+$/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!line || line.length < 2) return '';
+  const words = line.split(' ').slice(0, 7);
+  let title = words.join(' ');
+  if (title.length > 52) title = title.slice(0, 52).replace(/\s+\S*$/, '').trim() || title.slice(0, 52);
+  return title;
+}
+
+function heuristicChatTitle(userText, assistantText = '') {
+  const combined = `${userText || ''} ${assistantText || ''}`;
+  if (/caelix-note\.md/i.test(combined)) return 'Self-Check Note & Harness';
+  const src = String(userText || '').replace(/\s+/g, ' ').trim();
+  if (!src) return '';
+  const cleaned = src
+    .replace(/^(?:please|can you|could you|would you|hey|hi|hello|help me|i want to|i need to|how do i|what is|why does|let's|lets)\s+/i, '')
+    .replace(/[.?!]+$/, '')
+    .trim();
+  const words = (cleaned.length >= 4 ? cleaned : src).split(/\s+/).filter(Boolean).slice(0, 6);
+  if (!words.length) return '';
+  const titled = words
+    .map((w, i) => (i > 0 && /^(a|an|the|and|or|to|in|on|of|for|with)$/i.test(w)
+      ? w.toLowerCase()
+      : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(' ');
+  return cleanChatTitle(titled);
+}
+
 const TOOL_ALIASES = {
   'repo_browser.list_dir': 'list_dir',
   list_directory: 'list_dir',
@@ -441,10 +480,12 @@ class Engine {
     return { messages: [system, ...history], compacted: dropped };
   }
 
-  async send(sessionId, text, attachments = []) {
+  async send(sessionId, text, attachments = [], options = {}) {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error('That chat no longer exists.');
     if (this.controllers.has(sessionId)) throw new Error('A reply is already running in this chat.');
+    const hadPriorMessages = Array.isArray(session.messages) && session.messages.length > 0;
+    const provisionalTitle = options?.provisionalTitle ? String(options.provisionalTitle) : null;
     const controller = new AbortController();
     this.controllers.set(sessionId, controller);
     const started = Date.now();
@@ -727,6 +768,15 @@ class Engine {
         }
       }
       const context = this.contextReport(saved || session);
+      const firstAssistantText = messages.filter((m) => m.role === 'assistant').map((m) => m.content || '').join('\n').trim();
+      const shouldTitle = !hadPriorMessages && String(text || '').trim().length > 0;
+      if (shouldTitle && (session.provider === 'simulator' || session.provider === 'claude')) {
+        await this.maybeGenerateTitle(sessionId, {
+          userText: String(text || ''),
+          assistantText: firstAssistantText,
+          provisionalTitle,
+        });
+      }
       emit({
         type: 'done',
         usage,
@@ -741,6 +791,13 @@ class Engine {
         saved: Boolean(saved),
       });
       emit({ type: 'context', report: context, compacted });
+      if (shouldTitle && session.provider !== 'simulator' && session.provider !== 'claude') {
+        void this.maybeGenerateTitle(sessionId, {
+          userText: String(text || ''),
+          assistantText: firstAssistantText,
+          provisionalTitle,
+        });
+      }
       return { ok: true, summary };
     } catch (error) {
       const wasCancelled = controller.signal.aborted || /Cancelled\./i.test(error.message);
@@ -1629,6 +1686,80 @@ class Engine {
         finish(null, { text, toolCalls, usage });
       });
     });
+  }
+
+  sessionSummary(session) {
+    return {
+      id: session.id,
+      title: session.title,
+      cwd: session.cwd,
+      surface: session.surface || null,
+      provider: session.provider,
+      model: session.model,
+      mode: session.mode,
+      updatedAt: session.updatedAt,
+      createdAt: session.createdAt,
+    };
+  }
+
+  async maybeGenerateTitle(sessionId, { userText, assistantText = '', provisionalTitle = null } = {}) {
+    try {
+      const session = this.sessions.get(sessionId);
+      if (!session) return null;
+      const expected = provisionalTitle || 'New chat';
+      if (session.title !== expected && session.title !== 'New chat') return null;
+
+      let title = '';
+      if (session.provider !== 'simulator' && session.provider !== 'claude' && PROVIDERS[session.provider]?.baseUrl) {
+        const pool = this.getKeyPool(session.provider);
+        if (pool.length) {
+          const picked = this.pickKey(session.provider, session.model);
+          const snippetUser = String(userText || '').trim().slice(0, 600);
+          const snippetAssistant = String(assistantText || '').trim().slice(0, 600);
+          let generated = '';
+          try {
+            const result = await streamOpenAICompatible({
+              provider: session.provider,
+              model: session.model,
+              apiKey: picked.key,
+              maxTokens: 48,
+              timeoutMs: 12_000,
+              tools: [],
+              messages: [
+                {
+                  role: 'system',
+                  content: 'Write a concise 2 to 6 word title for this conversation. Return only the plain title text with no quotes, markdown, or trailing punctuation.',
+                },
+                {
+                  role: 'user',
+                  content: `User: ${snippetUser}${snippetAssistant ? `\n\nAssistant: ${snippetAssistant}` : ''}`,
+                },
+              ],
+              onDelta: (delta) => { generated += delta; },
+            });
+            title = cleanChatTitle(result?.text || generated);
+          } catch {
+            title = '';
+          }
+        }
+      }
+
+      if (!title) title = heuristicChatTitle(userText, assistantText);
+      if (!title) return null;
+
+      const latest = this.sessions.get(sessionId);
+      if (!latest) return null;
+      if (latest.title !== expected && latest.title !== 'New chat') return null;
+      if (latest.title === title) return title;
+
+      const updated = this.sessions.rename(sessionId, title);
+      if (updated) {
+        this.emit({ type: 'session-updated', session: this.sessionSummary(updated) });
+      }
+      return title;
+    } catch {
+      return null;
+    }
   }
 
   terminalTabs(sessionId) {

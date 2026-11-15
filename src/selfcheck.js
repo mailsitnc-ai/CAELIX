@@ -637,6 +637,8 @@ async function run(context) {
       await click('#surface-chat');
       await waitFor('document.querySelector("#app").getAttribute("data-surface") === "chat"', 3000, 'chat surface active');
       await waitFor('window.__caelixState.session?.surface === "chat" && window.__caelixState.session?.cwd === window.__caelixState.info?.chatRoot', 5000, 'auto-switched to CAELIX Chats');
+      const hiddenFolderUi = await evaluate('getComputedStyle(document.querySelector("#strip-folder")).display === "none" && getComputedStyle(document.querySelector("#project-btn")).display === "none"');
+      if (!hiddenFolderUi) throw new Error('Folder controls remained visible in Chat mode.');
       const chatBeforeNew = await evaluate('document.querySelectorAll(".session-item").length');
       await click('#new-chat');
       await waitFor(`document.querySelectorAll(".session-item").length === ${chatBeforeNew + 1}`, 5000, 'new chat in CAELIX Chats');
@@ -646,6 +648,10 @@ async function run(context) {
       await setValue('#prompt', 'Isolated chat message.');
       await click('#send-btn');
       await waitFor('window.__caelixState.streaming === false && document.querySelectorAll(".msg").length >= 2', 15000, 'chat reply finished');
+      const aiChatTitle = await evaluate('window.__caelixState.session?.title || ""');
+      if (!aiChatTitle || aiChatTitle === 'New chat' || aiChatTitle === 'Isolated chat message.') {
+        throw new Error(`Expected AI-generated chat title, got "${aiChatTitle}".`);
+      }
       await click('#surface-code');
       await waitFor('document.querySelector("#app").getAttribute("data-surface") === "code" && window.__caelixState.session?.surface === "code"', 5000, 'returned to code surface');
       const afterCodeCount = await evaluate('document.querySelectorAll(".session-item").length');
@@ -663,6 +669,7 @@ async function run(context) {
       })()`);
       await evaluate('([...document.querySelectorAll(".session-item")].find(el => el.textContent.includes("CAELIX self-check chat")) || document.querySelector(".session-item"))?.click()');
       await waitFor('document.querySelector("#chat-title").textContent === "CAELIX self-check chat" && document.querySelectorAll(".session-item").length === ' + codeCount, 5000, 'self-check chat active again');
+      await sleep(100);
       return 'Chat and Code sidebars and folders stay strictly separated';
     });
 

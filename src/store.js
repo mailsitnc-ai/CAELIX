@@ -171,10 +171,23 @@ class SessionStore {
       sessions: this.data.sessions
         .slice()
         .sort((a, b) => b.updatedAt - a.updatedAt)
-        .map(({ id, title, cwd, provider, model, mode, updatedAt, createdAt }) => ({
-          id, title, cwd, provider, model, mode, updatedAt, createdAt,
+        .map(({ id, title, cwd, surface, provider, model, mode, updatedAt, createdAt }) => ({
+          id, title, cwd, surface: surface || null, provider, model, mode, updatedAt, createdAt,
         })),
     };
+  }
+
+  normalizeChatSurfaceCwd(chatDir) {
+    if (!chatDir) return false;
+    let changed = false;
+    for (const s of this.data.sessions) {
+      if (s.surface === 'chat' && s.cwd !== chatDir) {
+        s.cwd = chatDir;
+        changed = true;
+      }
+    }
+    if (changed) this.persist();
+    return changed;
   }
 
   get(id) {

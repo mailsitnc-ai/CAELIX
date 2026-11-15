@@ -349,7 +349,7 @@ function renderStatusStrip() {
   const usage = $('#strip-usage');
   if (folder) {
     folder.textContent = state.surface === 'chat'
-      ? 'CAELIX Chats'
+      ? ''
       : displayProject(state.codeProject || state.project || state.session?.cwd);
   }
   if (branch) {
@@ -372,6 +372,11 @@ function renderStatusStrip() {
 }
 
 async function refreshGitBranch() {
+  if (state.surface === 'chat') {
+    state.gitBranch = null;
+    renderStatusStrip();
+    return;
+  }
   try {
     const res = await api.invoke('git:branch', { cwd: state.project || state.session?.cwd });
     state.gitBranch = res?.branch || null;
@@ -1011,8 +1016,13 @@ async function refreshKeys() {
   renderComposerState();
 }
 
+let refreshSessionsSeq = 0;
+let openSessionSeq = 0;
+
 async function refreshSessions() {
+  const seq = ++refreshSessionsSeq;
   const list = await api.invoke('sessions:list');
+  if (seq !== refreshSessionsSeq) return;
   state.sessions = list.sessions;
   state.activeId = list.activeId;
   renderSessions();
@@ -1032,8 +1042,11 @@ function renderAll() {
 }
 
 async function openSession(id) {
+  const seq = ++openSessionSeq;
   const session = await api.invoke('sessions:get', id);
-  if (!session) return;
+  if (!session || seq !== openSessionSeq) return;
+  await api.invoke('sessions:set-active', id);
+  if (seq !== openSessionSeq) return;
   const surf = sessionSurface(session);
   state.session = session;
   state.activeId = session.id;
@@ -1047,6 +1060,7 @@ async function openSession(id) {
   }
   if (state.surface !== surf) {
     await applySurface(surf, true, { skipSessionSwitch: true });
+    if (seq !== openSessionSeq) return;
   }
   state.projectFiles = null;
   state.lastUsageText = '';
@@ -1057,7 +1071,7 @@ async function openSession(id) {
   }
   await loadCheckpoints();
   await loadTerminalTabs();
-  await api.invoke('sessions:set-active', id);
+  if (seq !== openSessionSeq) return;
   if (surf === 'code') refreshGitBranch();
   renderAll();
   scrollToBottom(true);
@@ -1465,6 +1479,13 @@ function onChatEvent(event) {
       toast(`Restored ${event.restored.length} file(s).`);
       break;
     case 'done':
+      if (state.liveRaf) {
+        cancelAnimationFrame(state.liveRaf);
+        state.liveRaf = 0;
+      }
+      if (state.currentAssistant && state.liveText) {
+        paintLive();
+      }
       setStreaming(false);
       if (event.context) {
         state.contextReport = event.context;
@@ -1489,6 +1510,13 @@ function onChatEvent(event) {
       refreshSessions();
       break;
     case 'error':
+      if (state.liveRaf) {
+        cancelAnimationFrame(state.liveRaf);
+        state.liveRaf = 0;
+      }
+      if (state.currentAssistant && state.liveText) {
+        paintLive();
+      }
       setStreaming(false);
       appendError(event.message);
       if (event.summary) {
@@ -2280,6 +2308,10 @@ function hideMentions() {
 }
 
 async function updateMentions() {
+  if (state.surface === 'chat') {
+    hideMentions();
+    return;
+  }
   const prompt = $('#prompt');
   const menu = $('#mention-menu');
   if (!prompt || !menu) return;

@@ -1338,7 +1338,9 @@ html[data-theme="light"] .helper-card {
 #app[data-surface="chat"] .panel,
 #app[data-surface="chat"] #panel-toggle,
 #app[data-surface="chat"] #project-btn,
-#app[data-surface="chat"] #side-project {
+#app[data-surface="chat"] #side-project,
+#app[data-surface="chat"] #strip-folder,
+#app[data-surface="chat"] #strip-branch {
   display: none;
 }
 #app[data-surface="chat"].browser-open .panel {

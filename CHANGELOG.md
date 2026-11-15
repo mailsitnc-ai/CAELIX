@@ -1,5 +1,11 @@
 # CAELIX changelog
 
+## 0.1.15 — Folder-free Chat mode and AI-generated chat titles
+
+- **Strict no-folder Chat mode (`src/store.js`, `src/main.js`, `src/renderer/`):** Fixed `SessionStore.list()` dropping each session's `surface`, normalized any existing `surface: 'chat'` sessions away from Code project folders to `CAELIX Chats` on startup, hid the footer folder/branch pills in Chat mode (`#strip-folder`, `#strip-branch`), skipped `git:branch` lookups and `@` code-file mentions in Chat mode, flushed pending `liveRaf` text frames before clearing live state on `done`/`error`, and added sequence guards in `refreshSessions()`/`openSession()` against overlapping switches.
+- **AI-generated chat titles (`src/engine/index.js`, `src/engine/providers.js`, `src/main.js`):** Added automatic concise chat titling after the first completed turn in both Chat and Code modes (using `max_tokens: 48` on API providers with smart fallback for simulator/`claude` modes), updating the header and sidebar live via `session-updated` without ever overwriting manual user renames.
+- **Verified:** Added feature verification checks (`SessionStore` surface normalization and AI chat titling with manual-rename protection) plus Chat-mode hidden-folder and AI-title assertions in `src/selfcheck.js`, rebuilt `dist/CAELIX.app`, and ran `doctor`, `verify_features.js`, `terminal-probe.js`, and `selfcheck`.
+
 ## 0.1.14 — Built-in browser, real PTY Mac terminal, and isolated Chat/Code workspaces
 
 - **Built-in browser (`src/browser.js`, `src/engine/tools.js`, `src/main.js`, `src/renderer/`):** Added an embedded Chromium `WebContentsView` panel (`Browser` tab in the right panel + topbar `Browser` toggle that works in both Chat and Code modes) with Back, Forward, Reload, URL bar, external-open button, and automatic bounds/modal hiding. Wired all four agent browser tools (`browser_navigate`, `browser_read`, `browser_click`, `browser_type`) into `ToolRunner` with per-mode permission checks and React/HTML-safe input handling, supporting `https://` and local `http://` (such as `localhost`).

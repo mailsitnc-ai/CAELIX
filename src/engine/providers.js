@@ -352,6 +352,7 @@ async function streamOpenAICompatible(options) {
   const {
     provider, model, apiKey, messages, tools, signal, onDelta, onStatus,
     compactToolSchemas = true,
+    maxTokens = null,
     timeoutMs = Number(process.env.CAELIX_REQUEST_TIMEOUT_MS) || 35_000,
   } = options;
   const meta = PROVIDERS[provider];
@@ -372,6 +373,9 @@ async function streamOpenAICompatible(options) {
     stream: true,
     temperature: 0.2,
   };
+  if (Number.isFinite(maxTokens) && maxTokens > 0) {
+    body.max_tokens = Math.round(maxTokens);
+  }
   if (tools && tools.length) {
     body.tools = toolSchema(tools, compactToolSchemas);
     body.tool_choice = 'auto';
