@@ -191,6 +191,7 @@ class SessionStore {
       id: `chat_${crypto.randomUUID()}`,
       title: input.title || 'New chat',
       cwd: input.cwd || os.homedir(),
+      surface: input.surface === 'chat' ? 'chat' : (input.surface === 'code' ? 'code' : null),
       provider: input.provider || 'gemini',
       model: input.model || 'gemini-2.5-flash',
       mode: input.mode || 'ask',

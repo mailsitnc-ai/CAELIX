@@ -608,6 +608,20 @@ button { cursor: pointer; }
 .terminal-input span { color: var(--green); font-family: var(--mono); font-size: 11px; }
 .terminal-input input { flex: 1; min-width: 0; height: 27px; padding: 0 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); outline: none; font-family: var(--mono); font-size: 11px; }
 .terminal-input button { height: 27px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-3); color: var(--text-2); font-size: 11px; }
+.terminal-input #terminal-stop { color: #e5605c; }
+
+#browser-view:not(.hidden) { display: flex; flex-direction: column; overflow: hidden; }
+.browser-bar { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line-soft); background: var(--bg-2); }
+.browser-nav-btn { width: 26px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-3); color: var(--text-2); font-size: 12px; display: inline-flex; align-items: center; justify-content: center; }
+.browser-nav-btn:hover:not(:disabled) { color: var(--text); border-color: var(--muted); }
+.browser-nav-btn:disabled { opacity: 0.4; cursor: default; }
+.browser-url { flex: 1; min-width: 0; height: 26px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); outline: none; font-family: var(--mono); font-size: 11px; }
+.browser-url:focus { border-color: var(--accent); }
+.browser-go { height: 26px; padding: 0 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-3); color: var(--text-2); font-size: 11px; }
+.browser-go:hover { color: var(--text); }
+.browser-viewport { flex: 1; min-height: 0; position: relative; background: #0b0d10; display: flex; align-items: center; justify-content: center; }
+.browser-empty { max-width: 240px; text-align: center; padding: 18px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.browser-empty-title { font-weight: 600; color: var(--text-2); margin-bottom: 6px; }
 
 /* Keys */
 .overlay {
@@ -1322,7 +1336,15 @@ html[data-theme="light"] .helper-card {
 }
 
 #app[data-surface="chat"] .panel,
-#app[data-surface="chat"] #panel-toggle {
+#app[data-surface="chat"] #panel-toggle,
+#app[data-surface="chat"] #project-btn,
+#app[data-surface="chat"] #side-project {
+  display: none;
+}
+#app[data-surface="chat"].browser-open .panel {
+  display: flex;
+}
+#app[data-surface="chat"].browser-open .panel-tab:not([data-tab="browser"]) {
   display: none;
 }
 

@@ -1,10 +1,70 @@
 'use strict';
 
-const { spawn } = require('child_process');
+// Real terminal tabs. Each tab is an interactive zsh running under a real
+// PTY allocated by macOS expect(1), so prompts, colours, REPLs, pagers and
+// progress bars behave like Terminal.app and load the user's ~/.zshrc.
+//
+// Command completion uses a trailing printf whose format string has `%s_%d`
+// literally, while execution substitutes `<token>_<exitcode>`; therefore only
+// actual execution (never the echoed command line) can match the marker.
+
+const { spawn, execFileSync } = require('child_process');
 const crypto = require('crypto');
 
 const MAX_ENTRIES = 500;
 const DEFAULT_TIMEOUT = 120000;
+
+function stripAnsi(text) {
+  return String(text)
+    .replace(/\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)/g, '')
+    .replace(/\x1B\[[0-9;?]*[ -/]*[@-~]/g, '')
+    .replace(/\x1B[@-Z\\-_]/g, '')
+    .replace(/[\x00-\x07\x0B\x0C\x0E-\x1F\x7F]/g, '');
+}
+
+// Simulate carriage returns and backspaces (\x08) cleanly for a plain-text panel.
+function normalise(text) {
+  const cleaned = stripAnsi(text).replace(/\r+\n/g, '\n');
+  const lines = [];
+  let line = '';
+  for (let i = 0; i < cleaned.length; i += 1) {
+    const ch = cleaned[i];
+    if (ch === '\n') {
+      lines.push(line);
+      line = '';
+    } else if (ch === '\r') {
+      // Only overwrite if more printable content follows on the same line, or
+      // discard trailing \r padding produced by zsh PROMPT_SP.
+      line = '';
+    } else if (ch === '\x08') {
+      if (line.length) line = line.slice(0, -1);
+    } else {
+      line += ch;
+    }
+  }
+  lines.push(line);
+  return lines.join('\n');
+}
+
+function readLastLoginLine() {
+  try {
+    const user = process.env.USER || '';
+    if (!user) return '';
+    const out = execFileSync('/usr/bin/last', ['-1', user], { encoding: 'utf8', timeout: 250 });
+    const first = String(out || '').split('\n').map((l) => l.trim()).find(Boolean);
+    if (!first) return '';
+    const match = first.match(/^\S+\s+(\S+)\s+(.+?)(?:\s+-\s+|\s+still|\s*$)/);
+    if (match) return `Last login: ${match[2].trim()} on ${match[1].trim()}\n`;
+  } catch {
+    // Best effort only.
+  }
+  return '';
+}
+
+function stripMarkerLines(text) {
+  return String(text || '')
+    .replace(/^[^\n]*(?:echo\s+__C|__CX_)[^\n]*(?:\n|$)/gm, '');
+}
 
 class ShellTab {
   constructor({ id, title, cwd, emit, history, sessionId }) {
@@ -19,16 +79,27 @@ class ShellTab {
     this.busy = false;
     this.pending = null;
     this.closed = false;
+    this.lineTail = '';
 
-    this.child = spawn('/bin/zsh', ['-f'], {
+    if (!this.entries.length) {
+      const loginLine = readLastLoginLine();
+      if (loginLine) this.entries.push({ text: loginLine, at: Date.now() });
+    }
+
+    const expectScript = [
+      'spawn -noecho /bin/zsh -i',
+      'catch {stty cols 500 rows 40 < $spawn_out(slave,name)}',
+      'interact',
+    ].join('; ');
+
+    this.child = spawn('/usr/bin/expect', ['-c', expectScript], {
       cwd,
       env: {
         ...process.env,
         CAELIX: '1',
-        TERM: 'dumb',
-        PS1: '',
-        PROMPT: '',
-        RPROMPT: '',
+        TERM: 'xterm-256color',
+        COLUMNS: '500',
+        PROMPT_EOL_MARK: '',
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -40,6 +111,11 @@ class ShellTab {
     });
     this.child.on('close', (code) => {
       this.closed = true;
+      if (this.lineTail) {
+        const tail = stripMarkerLines(this.lineTail);
+        this.lineTail = '';
+        if (tail) this.push(tail);
+      }
       this.push(`\n[shell exited with code ${code ?? 0}]\n`);
       const error = new Error(`The shell exited with code ${code ?? 0}.`);
       this.finishRun(null, error);
@@ -53,26 +129,62 @@ class ShellTab {
     this.emit({ type: 'terminal-output', sessionId: this.sessionId, tabId: this.id, text });
   }
 
+  emitVisible(text, recordPending = null) {
+    if (!text) return;
+    const combined = this.lineTail + text;
+    this.lineTail = '';
+
+    // Only hold back an incomplete trailing line if it could be our helper
+    // printf echo or completion marker arriving split across PTY chunks.
+    const lastNl = combined.lastIndexOf('\n');
+    const completePart = lastNl >= 0 ? combined.slice(0, lastNl + 1) : '';
+    const tailPart = lastNl >= 0 ? combined.slice(lastNl + 1) : combined;
+
+    let visible = stripMarkerLines(completePart);
+    if (tailPart) {
+      if (/(?:echo\s+__C|__CX)/i.test(tailPart)) {
+        this.lineTail = tailPart;
+      } else {
+        visible += stripMarkerLines(tailPart);
+      }
+    }
+
+    if (visible) {
+      if (recordPending) recordPending.collected += visible;
+      this.push(visible);
+    }
+  }
+
   consume(chunk) {
-    const text = chunk.toString();
+    const text = normalise(chunk.toString());
+    if (!text) return;
+
     if (!this.pending) {
-      this.push(text);
+      this.emitVisible(text);
       return;
     }
+
     this.pending.raw += text;
-    const marker = `__CAELIX_DONE_${this.pending.token}__`;
-    const index = this.pending.raw.indexOf(marker);
-    if (index === -1) {
-      this.pending.collected += text;
-      this.push(text);
+    const token = this.pending.token;
+    const doneRe = new RegExp(`__CX_${token}_(\\d+)__`);
+    const match = this.pending.raw.match(doneRe);
+    if (!match) {
+      this.emitVisible(text, this.pending);
       return;
     }
-    const before = this.pending.raw.slice(0, index);
-    const after = this.pending.raw.slice(index);
-    const match = after.match(/^__CAELIX_DONE_[a-z0-9_]+__(\d+)/i);
-    this.pending.collected += before;
-    this.push(before);
-    this.finishRun(match ? Number(match[1]) : null, null);
+
+    const markerIdxInText = text.indexOf(match[0]);
+    if (markerIdxInText >= 0) {
+      const before = text.slice(0, markerIdxInText);
+      const after = text.slice(markerIdxInText + match[0].length).replace(/^\n/, '');
+      this.emitVisible(before, this.pending);
+      this.finishRun(Number(match[1]), null);
+      if (after) this.emitVisible(after);
+    } else {
+      // Marker spanned chunks: flush everything before, finish run cleanly.
+      this.emitVisible(text, this.pending);
+      this.finishRun(Number(match[1]), null);
+    }
   }
 
   finishRun(exitCode, error) {
@@ -82,25 +194,29 @@ class ShellTab {
     this.busy = false;
     clearTimeout(pending.timer);
     pending.raw = '';
+    if (this.lineTail) {
+      const tail = stripMarkerLines(this.lineTail);
+      this.lineTail = '';
+      if (tail) {
+        pending.collected += tail;
+        this.push(tail);
+      }
+    }
     if (error) pending.reject(error);
-    else pending.resolve({ id: this.id, exitCode, output: pending.collected });
+    else pending.resolve({ id: this.id, exitCode, output: stripMarkerLines(pending.collected) });
   }
 
   run(command, { timeoutMs = DEFAULT_TIMEOUT } = {}) {
     if (this.closed) throw new Error('This terminal has exited. Open a new one.');
-    if (this.busy) throw new Error('This terminal is still running a command.');
+    if (this.busy) throw new Error('This terminal is still running a command — press Stop to interrupt it.');
     const text = String(command || '');
     if (!text.trim()) throw new Error('The command is empty.');
     const token = `t${Date.now().toString(36)}${crypto.randomBytes(3).toString('hex')}`;
     this.busy = true;
-    this.entries.push({ text: `\n$ ${text}\n`, at: Date.now() });
-    this.emit({ type: 'terminal-output', sessionId: this.sessionId, tabId: this.id, text: `\n$ ${text}\n` });
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.busy = false;
-        this.pending = null;
-        try { process.kill(-this.child.pid, 'SIGKILL'); } catch { /* already gone */ }
-        reject(new Error('The command timed out. The shell was restarted in a new tab.'));
+        this.finishRun(null, new Error('The command timed out. Press Stop or open a new tab.'));
+        try { this.child.kill('SIGKILL'); } catch { /* already gone */ }
       }, Math.max(1000, Math.min(3_600_000, Number(timeoutMs) || DEFAULT_TIMEOUT)));
       this.pending = {
         token,
@@ -111,8 +227,16 @@ class ShellTab {
         reject,
       };
       this.child.stdin.write(`${text}\n`);
-      this.child.stdin.write(`print -r -- "__CAELIX_DONE_${token}__$?"\n`);
+      this.child.stdin.write(`echo "__CX_${token}_$?__"\n`);
     });
+  }
+
+  // Sends Ctrl+C (0x03) to the PTY so a stuck interactive program releases the tab.
+  interrupt() {
+    try {
+      this.child.stdin.write('\x03');
+    } catch { /* shell gone */ }
+    this.finishRun(null, new Error('Interrupted.'));
   }
 
   summary() {
@@ -129,7 +253,7 @@ class ShellTab {
   dispose() {
     this.closed = true;
     this.finishRun(null, new Error('The terminal was closed.'));
-    try { process.kill(-this.child.pid, 'SIGTERM'); } catch { /* already gone */ }
+    try { this.child.kill('SIGTERM'); } catch { /* already gone */ }
   }
 }
 
@@ -216,6 +340,15 @@ class TerminalManager {
     if (!tab) throw new Error('This chat has no terminal yet.');
     const result = await tab.run(command, options);
     return { ...result, output: result.output || '' };
+  }
+
+  interrupt(sessionId, tabId) {
+    const bucket = this.sessions.get(sessionId);
+    if (!bucket) return false;
+    const tab = bucket.tabs.find((item) => item.id === tabId) || bucket.tabs[0];
+    if (!tab) return false;
+    tab.interrupt();
+    return true;
   }
 
   dispose() {

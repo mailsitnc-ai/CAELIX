@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const fsp = require('fs/promises');
+const http = require('http');
 const path = require('path');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -614,16 +615,92 @@ async function run(context) {
       await click('#surface-chat');
       await waitFor('document.querySelector("#app").getAttribute("data-surface") === "chat"', 3000, 'switched to chat surface');
       await waitFor('document.querySelector("#panel").offsetWidth === 0 && !!document.querySelector(".chat-capability-pills")', 3000, 'chat surface hides code panel and keeps capability pills');
+      const chatCwd = await evaluate('window.__caelixState.session?.cwd');
+      const chatRoot = await evaluate('window.__caelixState.info?.chatRoot');
+      if (!chatRoot || chatCwd !== chatRoot) throw new Error(`Chat session leaked code cwd: ${chatCwd} vs ${chatRoot}`);
       const sharedBtnsVisible = await evaluate('["#mcp-btn", "#hooks-btn", "#helper-btn", "#memory-btn"].every(s => document.querySelector(s)?.offsetWidth > 0)');
       if (!sharedBtnsVisible) throw new Error('MCP, Hooks, Agents, or Skills button was hidden in Chat mode.');
       await click('#surface-code');
       await waitFor('document.querySelector("#app").getAttribute("data-surface") === "code" && document.querySelector("#panel").offsetWidth > 300 && !!document.querySelector(".folder-picker-card")', 3000, 'switched back to code surface');
+      const restoredCodeCwd = await evaluate('window.__caelixState.session?.cwd');
+      if (restoredCodeCwd === chatRoot) throw new Error('Code session inherited CAELIX Chats folder.');
       await snap('chat and code switcher');
       await click('.session-item.active .session-delete');
       await waitFor('document.querySelector(".session-item.active .session-delete.armed")', 3000, 'delete armed');
       await click('.session-item.active .session-delete');
       await waitFor(`document.querySelectorAll(".session-item").length === ${initialCount}`, 5000, 'temp switcher chat deleted');
-      return 'Chat <-> Code switcher, shared MCP/Hooks/Agents/Skills, and Code folder picker verified';
+      return 'Chat <-> Code switcher, isolated folders, shared MCP/Hooks/Agents/Skills, and Code folder picker verified';
+    });
+
+    await step('keep chat conversations isolated from code sidebar and folders', async () => {
+      const codeCount = await evaluate('document.querySelectorAll(".session-item").length');
+      await click('#surface-chat');
+      await waitFor('document.querySelector("#app").getAttribute("data-surface") === "chat"', 3000, 'chat surface active');
+      await waitFor('window.__caelixState.session?.surface === "chat" && window.__caelixState.session?.cwd === window.__caelixState.info?.chatRoot', 5000, 'auto-switched to CAELIX Chats');
+      const chatBeforeNew = await evaluate('document.querySelectorAll(".session-item").length');
+      await click('#new-chat');
+      await waitFor(`document.querySelectorAll(".session-item").length === ${chatBeforeNew + 1}`, 5000, 'new chat in CAELIX Chats');
+      const newChatCwd = await evaluate('window.__caelixState.session?.cwd');
+      const chatRoot = await evaluate('window.__caelixState.info?.chatRoot');
+      if (newChatCwd !== chatRoot) throw new Error(`New chat in Chat mode used ${newChatCwd} instead of ${chatRoot}`);
+      await setValue('#prompt', 'Isolated chat message.');
+      await click('#send-btn');
+      await waitFor('window.__caelixState.streaming === false && document.querySelectorAll(".msg").length >= 2', 15000, 'chat reply finished');
+      await click('#surface-code');
+      await waitFor('document.querySelector("#app").getAttribute("data-surface") === "code" && window.__caelixState.session?.surface === "code"', 5000, 'returned to code surface');
+      const afterCodeCount = await evaluate('document.querySelectorAll(".session-item").length');
+      if (afterCodeCount !== codeCount) throw new Error(`Chat session leaked into Code sidebar (${afterCodeCount} vs ${codeCount}).`);
+      await evaluate(`(async () => {
+        const list = await window.caelix.invoke('sessions:list');
+        for (const s of list.sessions) {
+          if (s.surface === 'chat') await window.caelix.invoke('sessions:delete', s.id);
+        }
+        const refreshed = await window.caelix.invoke('sessions:list');
+        const target = refreshed.sessions.find((s) => s.title === 'CAELIX self-check chat') || refreshed.sessions[0];
+        if (target) {
+          await window.caelix.invoke('sessions:set-active', target.id);
+        }
+      })()`);
+      await evaluate('([...document.querySelectorAll(".session-item")].find(el => el.textContent.includes("CAELIX self-check chat")) || document.querySelector(".session-item"))?.click()');
+      await waitFor('document.querySelector("#chat-title").textContent === "CAELIX self-check chat" && document.querySelectorAll(".session-item").length === ' + codeCount, 5000, 'self-check chat active again');
+      return 'Chat and Code sidebars and folders stay strictly separated';
+    });
+
+    await step('built-in browser panel operates a local page with navigate, type, click and read', async () => {
+      const server = http.createServer((_req, res) => {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end('<!doctype html><html><head><title>CAELIX Test Page</title></head><body><input id="name-input" type="text"><button id="go-btn" onclick="document.getElementById(\'result\').textContent=\'Submitted: \' + document.getElementById(\'name-input\').value">Submit</button><div id="result">Waiting</div></body></html>');
+      });
+      await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const { port } = server.address();
+      const targetUrl = `http://127.0.0.1:${port}/`;
+      const initialCount = await evaluate('document.querySelectorAll(".session-item").length');
+      const prevActiveId = await evaluate('window.__caelixState.activeId');
+      try {
+        await click('#new-chat');
+        await waitFor(`window.__caelixState.activeId !== ${JSON.stringify(prevActiveId)} && document.querySelectorAll(".session-item").length === ${initialCount + 1}`, 5000, 'temp chat for browser');
+        await click('#mode-chip');
+        await waitFor('!document.querySelector("#mode-menu").classList.contains("hidden")', 3000, 'mode menu for browser');
+        await click('[data-mode="bypass"]');
+        await waitFor('window.__caelixState.session?.mode === "bypass"', 3000, 'bypass enabled for browser');
+        await setValue('#prompt', `browser-demo ${targetUrl}`);
+        await click('#send-btn');
+        await waitFor('window.__caelixState.streaming === false && document.querySelector("#transcript").textContent.includes("navigation, form input, click, and read completed")', 20000, 'browser demo completed');
+        await waitFor('document.querySelector(".panel-tab[data-tab=\\"browser\\"]").classList.contains("active")', 4000, 'browser tab auto-opened');
+        const browserUrl = await evaluate('document.querySelector("#browser-url").value');
+        if (!browserUrl.includes(`127.0.0.1:${port}`)) throw new Error(`Expected browser URL to show ${targetUrl}, got ${browserUrl}`);
+        const readWorked = await evaluate('document.querySelector("#transcript").textContent.includes("Submitted: caelix-browser-ok")');
+        if (!readWorked) throw new Error('Expected final browser_read output to include "Submitted: caelix-browser-ok".');
+        await click('.panel-tab[data-tab="changes"]');
+        await click('.session-item.active .session-delete');
+        await waitFor('document.querySelector(".session-item.active .session-delete.armed")', 3000, 'browser test delete armed');
+        await click('.session-item.active .session-delete');
+        await waitFor(`document.querySelectorAll(".session-item").length === ${initialCount}`, 5000, 'temp browser chat deleted');
+        return `browser operated ${targetUrl} (navigate, type, click, read)`;
+      } finally {
+        await evaluate('window.caelix.invoke("browser:hide").catch(() => {})').catch(() => {});
+        server.close();
+      }
     });
 
     await step('reset chat usage with /reset while carrying context summary forward', async () => {

@@ -210,6 +210,41 @@ function toolDefinitions(root) {
       },
     },
     {
+      name: 'browser_navigate',
+      description: 'Open a URL in CAELIX\'s built-in browser panel, which the user can watch. Use browser_read afterwards to see the page. Requires approval.',
+      parameters: {
+        type: 'object',
+        properties: { url: { type: 'string', description: 'http(s) URL' } },
+        required: ['url'],
+      },
+    },
+    {
+      name: 'browser_read',
+      description: 'Read the page currently open in the built-in browser: title, URL, readable text, links and interactive elements with selectors. No approval needed.',
+      parameters: { type: 'object', properties: {} },
+    },
+    {
+      name: 'browser_click',
+      description: 'Click an element in the built-in browser by CSS selector (use browser_read to find selectors). Requires approval.',
+      parameters: {
+        type: 'object',
+        properties: { selector: { type: 'string', description: 'CSS selector' } },
+        required: ['selector'],
+      },
+    },
+    {
+      name: 'browser_type',
+      description: 'Type text into a field in the built-in browser by CSS selector. Requires approval.',
+      parameters: {
+        type: 'object',
+        properties: {
+          selector: { type: 'string', description: 'CSS selector' },
+          text: { type: 'string' },
+        },
+        required: ['selector', 'text'],
+      },
+    },
+    {
       name: 'notebook_edit',
       description: 'Read or edit cells in a Jupyter .ipynb notebook as structured JSON without corrupting metadata.',
       parameters: {
@@ -326,7 +361,7 @@ function toolDefinitions(root) {
 }
 
 class ToolRunner {
-  constructor({ root, mode, signal, ask, emit, tasks, questioner }) {
+  constructor({ root, mode, signal, ask, emit, tasks, questioner, browser }) {
     this.root = path.resolve(root);
     this.mode = mode || 'ask';
     this.signal = signal;
@@ -334,6 +369,13 @@ class ToolRunner {
     this.emit = emit;
     this.tasks = tasks || null;
     this.questioner = questioner || null;
+    this.browser = browser || null;
+  }
+
+  getBrowser() {
+    const panel = typeof this.browser === 'function' ? this.browser() : this.browser;
+    if (!panel) throw new Error('The built-in browser is only available in the CAELIX desktop app.');
+    return panel;
   }
 
   resolvePath(input, { mustExist = false } = {}) {
@@ -380,6 +422,10 @@ class ToolRunner {
       case 'todo_write': return this.todoWrite(input);
       case 'web_fetch': return this.webFetch(input);
       case 'web_search': return this.webSearch(input);
+      case 'browser_navigate': return this.browserNavigate(input);
+      case 'browser_read': return this.browserRead(input);
+      case 'browser_click': return this.browserClick(input);
+      case 'browser_type': return this.browserType(input);
       case 'notebook_edit': return this.notebookEdit(input);
       case 'skill': return this.loadSkill(input);
       case 'multi_edit': return this.multiEdit(input);
@@ -818,6 +864,39 @@ class ToolRunner {
       output: formatted || `No results found for "${query}".`,
       meta: { count: results.length, query },
     };
+  }
+
+  async browserNavigate(input) {
+    const raw = String(input.url || '').trim();
+    if (!raw) throw new Error('A URL is required.');
+    const decision = await this.permission('browser_navigate', 'Open in browser', raw, raw, 'network');
+    if (decision !== 'allow') throw new Error('The user denied opening this page in the browser.');
+    const state = await this.getBrowser().navigate(raw);
+    return {
+      output: `Opened ${state.url}${state.title ? ` (${state.title})` : ''} in the built-in browser. Use browser_read to inspect its contents and element selectors.`,
+      meta: { url: state.url, title: state.title },
+    };
+  }
+
+  async browserRead() {
+    return this.getBrowser().read();
+  }
+
+  async browserClick(input) {
+    const selector = String(input.selector || '').trim();
+    if (!selector) throw new Error('A CSS selector is required.');
+    const decision = await this.permission('browser_click', 'Click in browser', selector, selector, 'network');
+    if (decision !== 'allow') throw new Error('The user denied clicking this browser element.');
+    return this.getBrowser().click(selector);
+  }
+
+  async browserType(input) {
+    const selector = String(input.selector || '').trim();
+    const text = String(input.text ?? '');
+    if (!selector) throw new Error('A CSS selector is required.');
+    const decision = await this.permission('browser_type', 'Type in browser', selector, `${selector} <- "${text.slice(0, 80)}"`, 'network');
+    if (decision !== 'allow') throw new Error('The user denied typing into this browser element.');
+    return this.getBrowser().type({ selector, text });
   }
 
   async notebookEdit(input) {

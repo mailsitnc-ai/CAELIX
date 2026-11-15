@@ -54,6 +54,7 @@
         <button id="theme-btn" class="icon-btn" title="Switch appearance" aria-label="Switch appearance">◐</button>
         <button id="mcp-btn" class="ghost-btn" title="MCP servers (/mcp)">MCP</button>
         <button id="hooks-btn" class="ghost-btn" title="Lifecycle hooks (/hooks)">Hooks</button>
+        <button id="browser-btn" class="ghost-btn" title="Open built-in browser">Browser</button>
         <button id="keys-btn" class="ghost-btn">Keys</button>
         <button id="panel-toggle" class="icon-btn" title="Toggle panel" aria-label="Toggle panel">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="2.5" width="13" height="11" rx="2.5" stroke="currentColor"/><path d="M10 2.5v11" stroke="currentColor"/></svg>
@@ -142,6 +143,7 @@
           <div class="panel-tabs">
             <button class="panel-tab active" data-tab="changes">Changes</button>
             <button class="panel-tab" data-tab="terminal">Terminal</button>
+            <button class="panel-tab" data-tab="browser">Browser</button>
             <button class="panel-tab" data-tab="context">Context</button>
           </div>
           <button id="panel-close" class="icon-btn" title="Close panel" aria-label="Close panel">×</button>
@@ -163,6 +165,23 @@
             <span>$</span>
             <input id="terminal-cmd" placeholder="Run a command in this folder" aria-label="Terminal command">
             <button id="terminal-run">Run</button>
+            <button id="terminal-stop" title="Interrupt the running command (Ctrl+C)">Stop</button>
+          </div>
+        </div>
+        <div class="panel-body hidden" id="browser-view">
+          <div class="browser-bar">
+            <button id="browser-back" class="browser-nav-btn" title="Back" aria-label="Back" disabled>←</button>
+            <button id="browser-forward" class="browser-nav-btn" title="Forward" aria-label="Forward" disabled>→</button>
+            <button id="browser-reload" class="browser-nav-btn" title="Reload" aria-label="Reload">↻</button>
+            <input id="browser-url" class="browser-url" placeholder="https://… or localhost:3000" aria-label="Browser URL">
+            <button id="browser-go" class="browser-go" type="button">Go</button>
+            <button id="browser-ext" class="browser-nav-btn" title="Open in system browser" aria-label="Open externally">↗</button>
+          </div>
+          <div id="browser-viewport" class="browser-viewport">
+            <div id="browser-empty" class="browser-empty">
+              <div class="browser-empty-title">Built-in Browser</div>
+              <p>Enter a URL above or ask CAELIX to open and inspect a page directly here.</p>
+            </div>
           </div>
         </div>
         <div class="panel-body hidden" id="context-view">

@@ -1,5 +1,12 @@
 # CAELIX changelog
 
+## 0.1.14 — Built-in browser, real PTY Mac terminal, and isolated Chat/Code workspaces
+
+- **Built-in browser (`src/browser.js`, `src/engine/tools.js`, `src/main.js`, `src/renderer/`):** Added an embedded Chromium `WebContentsView` panel (`Browser` tab in the right panel + topbar `Browser` toggle that works in both Chat and Code modes) with Back, Forward, Reload, URL bar, external-open button, and automatic bounds/modal hiding. Wired all four agent browser tools (`browser_navigate`, `browser_read`, `browser_click`, `browser_type`) into `ToolRunner` with per-mode permission checks and React/HTML-safe input handling, supporting `https://` and local `http://` (such as `localhost`).
+- **Working real Mac terminal (`src/engine/terminal.js`, `src/renderer/`):** Completed the `/usr/bin/expect` PTY `zsh -i` shell tabs with 500-column PTY sizing (preventing line wrapping on long paths), `Last login` header, real backspace (`\x08`) and carriage-return simulation, `PROMPT_EOL_MARK=''` cleanup, immediate flushing of live prompts (`user@host dir % `), non-wrapping completion marker detection (`__CX_<token>_$?__`), and a `Stop` (`Ctrl+C`) button.
+- **Strict Chat vs. Code workspace separation (`src/main.js`, `src/store.js`, `src/renderer/app.js`, `src/engine/index.js`):** Chat-surface conversations now always live in `~/Documents/CAELIX Chats` and never inherit or leak into Code project folders. Switching between `Chat` and `Code` switches/isolates active sessions, filters sidebars strictly by surface, hides Code folder buttons in Chat mode, and adjusts the system prompt cleanly.
+- **Verified:** `npm run doctor`, `checks/terminal-probe.js`, `checks/verify_features.js` (`ALL 20 FEATURE VERIFICATIONS PASSED`), and the expanded 27-step `npm run selfcheck` (including live built-in browser `navigate`/`type`/`click`/`read` and Chat/Code isolation) all pass with 0 errors.
+
 ## 0.1.13 — OmniRoute as a managed local gateway provider
 
 - New provider **OmniRoute** (www.omniroute.online): one OpenAI-compatible endpoint on localhost:20128 that routes across 352 providers with automatic fallback, quota pooling and circuit breakers. Verified live before adding: gateway up, key test, 475-model catalog, SSE streaming and `auto` routing all probed against a real gateway (20-check suite extended to cover the catalog, friendly failures and the model-refresh path).

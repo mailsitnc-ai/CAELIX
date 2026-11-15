@@ -23,6 +23,9 @@ const state = {
   activeId: null,
   session: null,
   project: '',
+  codeProject: '',
+  activePanelTab: 'changes',
+  browserState: { visible: false, url: '', title: '', canBack: false, canForward: false, loading: false },
   streaming: false,
   changes: [],
   terminal: [],
@@ -206,6 +209,13 @@ function bucket(ts) {
   return 'Older';
 }
 
+function sessionSurface(session) {
+  if (!session) return state.surface;
+  if (session.surface === 'chat' || session.surface === 'code') return session.surface;
+  if (state.info?.chatRoot && session.cwd === state.info.chatRoot) return 'chat';
+  return 'code';
+}
+
 function renderSessions() {
   const list = $('#session-list');
   const query = $('#search').value.trim().toLowerCase();
@@ -213,6 +223,7 @@ function renderSessions() {
   const groups = new Map();
   for (const session of state.sessions) {
     if (query && !String(session.title).toLowerCase().includes(query)) continue;
+    if (sessionSurface(session) !== state.surface) continue;
     const label = bucket(session.updatedAt);
     if (!groups.has(label)) groups.set(label, []);
     groups.get(label).push(session);
@@ -232,7 +243,8 @@ function renderSessions() {
       button.dataset.session = session.id;
       button.tabIndex = 0;
       button.setAttribute('role', 'button');
-      button.innerHTML = `<span class="session-title">${escapeHtml(session.title)}</span><span class="session-meta">${escapeHtml(displayProject(session.cwd))} · ${escapeHtml(session.model || '')}</span><button class="session-delete" title="Delete chat" aria-label="Delete chat">×</button>`;
+      const scopeLabel = sessionSurface(session) === 'chat' ? 'Chat' : displayProject(session.cwd);
+      button.innerHTML = `<span class="session-title">${escapeHtml(session.title)}</span><span class="session-meta">${escapeHtml(scopeLabel)} · ${escapeHtml(session.model || '')}</span><button class="session-delete" title="Delete chat" aria-label="Delete chat">×</button>`;
       button.addEventListener('click', (event) => {
         if (event.target.closest('.session-delete')) return;
         openSession(session.id);
@@ -259,7 +271,8 @@ function renderSessions() {
         clearTimeout(disarmTimer);
         await api.invoke('sessions:delete', session.id);
         await refreshSessions();
-        if (state.activeId) await openSession(state.activeId);
+        const nextForSurface = state.sessions.find((item) => sessionSurface(item) === state.surface);
+        if (nextForSurface) await openSession(nextForSurface.id);
         else await newChat();
         renderAll();
         toast('Chat deleted.');
@@ -334,9 +347,13 @@ function renderStatusStrip() {
   const branch = $('#strip-branch');
   const ctx = $('#strip-context');
   const usage = $('#strip-usage');
-  if (folder) folder.textContent = displayProject(state.project || state.session?.cwd);
+  if (folder) {
+    folder.textContent = state.surface === 'chat'
+      ? 'CAELIX Chats'
+      : displayProject(state.codeProject || state.project || state.session?.cwd);
+  }
   if (branch) {
-    if (state.gitBranch) {
+    if (state.surface === 'code' && state.gitBranch) {
       branch.textContent = state.gitBranch;
       branch.classList.remove('hidden');
     } else {
@@ -388,10 +405,12 @@ function renderAttachments() {
 }
 
 function recentProjectFolders() {
+  const chatDir = state.info?.chatRoot;
   const seen = new Set();
   const out = [];
-  for (const dir of [state.project, state.session?.cwd, ...(state.sessions || []).map((s) => s.cwd)]) {
-    if (!dir || seen.has(dir)) continue;
+  const codeSessions = (state.sessions || []).filter((s) => sessionSurface(s) === 'code');
+  for (const dir of [state.codeProject, state.project, state.session?.cwd, ...codeSessions.map((s) => s.cwd)]) {
+    if (!dir || dir === chatDir || seen.has(dir)) continue;
     seen.add(dir);
     out.push(dir);
     if (out.length >= 5) break;
@@ -1015,11 +1034,20 @@ function renderAll() {
 async function openSession(id) {
   const session = await api.invoke('sessions:get', id);
   if (!session) return;
+  const surf = sessionSurface(session);
   state.session = session;
   state.activeId = session.id;
   state.changes = (session.changes || []).filter((change) => change.file);
   state.terminal = session.terminal || [];
-  state.project = session.cwd;
+  if (surf === 'chat') {
+    state.project = state.info?.chatRoot || session.cwd;
+  } else {
+    state.project = session.cwd;
+    if (session.cwd && session.cwd !== state.info?.chatRoot) state.codeProject = session.cwd;
+  }
+  if (state.surface !== surf) {
+    await applySurface(surf, true, { skipSessionSwitch: true });
+  }
   state.projectFiles = null;
   state.lastUsageText = '';
   try {
@@ -1030,20 +1058,26 @@ async function openSession(id) {
   await loadCheckpoints();
   await loadTerminalTabs();
   await api.invoke('sessions:set-active', id);
-  refreshGitBranch();
+  if (surf === 'code') refreshGitBranch();
   renderAll();
   scrollToBottom(true);
 }
 
 async function newChat() {
+  const targetSurface = state.surface === 'chat' ? 'chat' : 'code';
   const session = await api.invoke('sessions:create', {
-    cwd: state.project,
+    cwd: targetSurface === 'chat' ? null : (state.codeProject || state.project),
+    surface: targetSurface,
     provider: state.session?.provider || (state.info.selfcheck ? 'simulator' : 'gemini'),
     model: state.session?.model || (state.info.selfcheck ? 'sim-1' : 'gemini-2.5-flash'),
     mode: state.session?.mode || 'ask',
   });
   state.session = session;
   state.activeId = session.id;
+  state.project = session.cwd;
+  if (targetSurface === 'code' && session.cwd && session.cwd !== state.info?.chatRoot) {
+    state.codeProject = session.cwd;
+  }
   state.changes = [];
   state.terminal = [];
   state.contextReport = null;
@@ -1399,6 +1433,20 @@ function onChatEvent(event) {
       renderTerminalTabs();
       renderTerminal();
       break;
+    case 'browser-state':
+      state.browserState = {
+        visible: Boolean(event.visible),
+        url: event.url || '',
+        title: event.title || '',
+        canBack: Boolean(event.canBack),
+        canForward: Boolean(event.canForward),
+        loading: Boolean(event.loading),
+      };
+      updateBrowserToolbar();
+      if (event.error) toast(`Browser error: ${event.error}`);
+      if (event.visible) openBrowserPanel({ focusInput: false });
+      else syncBrowserView();
+      break;
     case 'todos':
       if (state.session) state.session.todos = event.items || [];
       renderTodos(event.items || []);
@@ -1726,14 +1774,94 @@ async function sendMessage() {
   }
 }
 
+function updateBrowserToolbar() {
+  const b = state.browserState || {};
+  const back = $('#browser-back');
+  const fwd = $('#browser-forward');
+  const reload = $('#browser-reload');
+  const urlInput = $('#browser-url');
+  const empty = $('#browser-empty');
+  if (back) back.disabled = !b.canBack;
+  if (fwd) fwd.disabled = !b.canForward;
+  if (reload) reload.textContent = b.loading ? '✕' : '↻';
+  if (urlInput && document.activeElement !== urlInput && b.url) urlInput.value = b.url;
+  if (empty) empty.classList.toggle('hidden', Boolean(b.url));
+}
+
+function syncBrowserView() {
+  const appEl = $('#app');
+  const viewport = $('#browser-viewport');
+  if (!appEl || !viewport) return;
+  const anyModal = Boolean(state.keysOpen || state.memoryOpen || state.mcpOpen || state.hooksOpen || state.helperOpen);
+  const panelOpen = !appEl.classList.contains('panel-collapsed')
+    && (state.surface === 'code' || appEl.classList.contains('browser-open'));
+  const shouldShow = state.activePanelTab === 'browser' && panelOpen && !anyModal && Boolean(state.browserState?.url);
+  if (!shouldShow) {
+    api.invoke('browser:hide').catch(() => {});
+    return;
+  }
+  const rect = viewport.getBoundingClientRect();
+  if (rect.width < 20 || rect.height < 20) {
+    api.invoke('browser:hide').catch(() => {});
+    return;
+  }
+  const box = {
+    x: Math.round(rect.left),
+    y: Math.round(rect.top),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  };
+  api.invoke('browser:show', box).catch(() => {});
+}
+
+function activatePanelTab(target) {
+  state.activePanelTab = target;
+  for (const tab of $$('.panel-tab')) tab.classList.toggle('active', tab.dataset.tab === target);
+  $('#changes-view').classList.toggle('hidden', target !== 'changes');
+  $('#terminal-view').classList.toggle('hidden', target !== 'terminal');
+  $('#browser-view').classList.toggle('hidden', target !== 'browser');
+  $('#context-view').classList.toggle('hidden', target !== 'context');
+  if (target === 'terminal') {
+    renderTerminalTabs();
+    renderTerminal();
+  }
+  if (target === 'context') renderContext();
+  requestAnimationFrame(() => syncBrowserView());
+}
+
+function openBrowserPanel({ focusInput = true } = {}) {
+  const appEl = $('#app');
+  if (!appEl) return;
+  appEl.classList.remove('panel-collapsed');
+  if (state.surface === 'chat') appEl.classList.add('browser-open');
+  activatePanelTab('browser');
+  if (focusInput && !state.browserState?.url) $('#browser-url')?.focus();
+}
+
+async function navigateBrowser(rawUrl) {
+  const url = String(rawUrl || $('#browser-url')?.value || '').trim();
+  if (!url) return;
+  openBrowserPanel({ focusInput: false });
+  try {
+    const next = await api.invoke('browser:navigate', url);
+    if (next) state.browserState = next;
+    updateBrowserToolbar();
+    syncBrowserView();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
 function openKeys() {
   state.keysOpen = true;
   renderKeys();
   $('#keys-screen').classList.remove('hidden');
+  syncBrowserView();
 }
 function closeKeys() {
   state.keysOpen = false;
   $('#keys-screen').classList.add('hidden');
+  syncBrowserView();
 }
 
 function renderMcpRows(servers = []) {
@@ -1777,6 +1905,7 @@ function renderMcpRows(servers = []) {
 async function openMcp() {
   state.mcpOpen = true;
   $('#mcp-screen').classList.remove('hidden');
+  syncBrowserView();
   $('#mcp-list').innerHTML = '<div class="config-empty">Checking MCP servers…</div>';
   try {
     const servers = await api.invoke('mcp:list', { cwd: state.project });
@@ -1789,6 +1918,7 @@ async function openMcp() {
 function closeMcp() {
   state.mcpOpen = false;
   $('#mcp-screen').classList.add('hidden');
+  syncBrowserView();
 }
 
 function renderHookRows(items = []) {
@@ -1831,6 +1961,7 @@ function renderHookRows(items = []) {
 async function openHooks() {
   state.hooksOpen = true;
   $('#hooks-screen').classList.remove('hidden');
+  syncBrowserView();
   try {
     const items = await api.invoke('hooks:list', { cwd: state.project });
     renderHookRows(items);
@@ -1842,6 +1973,7 @@ async function openHooks() {
 function closeHooks() {
   state.hooksOpen = false;
   $('#hooks-screen').classList.add('hidden');
+  syncBrowserView();
 }
 
 function renderAgentsList(items = []) {
@@ -1874,6 +2006,7 @@ function renderAgentsList(items = []) {
 async function openHelper() {
   state.helperOpen = true;
   $('#helper-screen').classList.remove('hidden');
+  syncBrowserView();
   try {
     const list = await api.invoke('agents:list', { cwd: state.project });
     state.agents = list;
@@ -1885,6 +2018,7 @@ async function openHelper() {
 function closeHelper() {
   state.helperOpen = false;
   $('#helper-screen').classList.add('hidden');
+  syncBrowserView();
 }
 
 async function refreshMemory() {
@@ -1924,6 +2058,7 @@ async function loadMemoryEditor() {
 async function openMemory() {
   state.memoryOpen = true;
   $('#memory-screen').classList.remove('hidden');
+  syncBrowserView();
   try {
     await loadMemoryEditor();
   } catch (error) {
@@ -1934,6 +2069,7 @@ async function openMemory() {
 function closeMemory() {
   state.memoryOpen = false;
   $('#memory-screen').classList.add('hidden');
+  syncBrowserView();
 }
 
 async function saveMemory() {
@@ -2084,9 +2220,12 @@ function applyViewMode(viewMode) {
   }
 }
 
-function applySurface(surface, persist = false) {
-  state.surface = surface === 'chat' ? 'chat' : 'code';
-  $('#app')?.setAttribute('data-surface', state.surface);
+async function applySurface(surface, persist = false, { skipSessionSwitch = false } = {}) {
+  const next = surface === 'chat' ? 'chat' : 'code';
+  state.surface = next;
+  const appEl = $('#app');
+  appEl?.setAttribute('data-surface', state.surface);
+  if (next === 'chat') appEl?.classList.remove('browser-open');
   const chatBtn = $('#surface-chat');
   const codeBtn = $('#surface-code');
   chatBtn?.classList.toggle('active', state.surface === 'chat');
@@ -2099,12 +2238,39 @@ function applySurface(surface, persist = false) {
       ? 'Ask CAELIX anything — MCP, Skills, Hooks & Agents stay active (/ commands)'
       : 'Ask CAELIX to build, fix, or explain something… (/ commands, @ files)';
   }
-  if (state.session && !(state.session.messages || []).length) {
-    renderEmpty();
-  }
   if (persist) {
     api.invoke('settings:set', { surface: state.surface }).catch(() => {});
   }
+  if (!skipSessionSwitch && state.initialized && state.session && sessionSurface(state.session) !== next) {
+    if ((state.session.messages || []).length > 0) {
+      const existing = state.sessions.find((item) => sessionSurface(item) === next);
+      if (existing) await openSession(existing.id);
+      else await newChat();
+    } else {
+      const nextCwd = next === 'chat'
+        ? (state.info?.chatRoot || state.project)
+        : (state.codeProject || state.info?.project);
+      await api.invoke('sessions:update', { id: state.session.id, surface: next, cwd: nextCwd }).catch(() => {});
+      state.session.surface = next;
+      state.session.cwd = nextCwd;
+      state.project = nextCwd;
+      const entry = state.sessions.find((item) => item.id === state.session.id);
+      if (entry) {
+        entry.surface = next;
+        entry.cwd = nextCwd;
+      }
+      await loadTerminalTabs().catch(() => {});
+      if (next === 'code') refreshGitBranch();
+      renderAll();
+    }
+  } else {
+    renderSessions();
+    if (state.session) {
+      renderChips();
+      if (!(state.session.messages || []).length) renderEmpty();
+    }
+  }
+  syncBrowserView();
 }
 
 function hideMentions() {
@@ -2482,24 +2648,59 @@ function bind() {
   $('#surface-chat')?.addEventListener('click', () => applySurface('chat', true));
   $('#surface-code')?.addEventListener('click', () => applySurface('code', true));
 
-  $('#panel-toggle').addEventListener('click', () => $('#app').classList.toggle('panel-collapsed'));
-  $('#panel-close').addEventListener('click', () => $('#app').classList.add('panel-collapsed'));
+  $('#panel-toggle').addEventListener('click', () => {
+    $('#app').classList.toggle('panel-collapsed');
+    syncBrowserView();
+  });
+  $('#panel-close').addEventListener('click', () => {
+    const appEl = $('#app');
+    appEl.classList.add('panel-collapsed');
+    appEl.classList.remove('browser-open');
+    syncBrowserView();
+  });
+  $('#browser-btn')?.addEventListener('click', () => {
+    const appEl = $('#app');
+    const alreadyShowingBrowser = !appEl.classList.contains('panel-collapsed')
+      && state.activePanelTab === 'browser'
+      && (state.surface === 'code' || appEl.classList.contains('browser-open'));
+    if (alreadyShowingBrowser) {
+      if (state.surface === 'chat') appEl.classList.remove('browser-open');
+      appEl.classList.add('panel-collapsed');
+      syncBrowserView();
+    } else {
+      openBrowserPanel({ focusInput: true });
+    }
+  });
   for (const tab of $$('.panel-tab')) {
-    tab.addEventListener('click', () => {
-      for (const other of $$('.panel-tab')) other.classList.toggle('active', other === tab);
-      const target = tab.dataset.tab;
-      $('#changes-view').classList.toggle('hidden', target !== 'changes');
-      $('#terminal-view').classList.toggle('hidden', target !== 'terminal');
-      $('#context-view').classList.toggle('hidden', target !== 'context');
-      if (target === 'terminal') {
-        renderTerminalTabs();
-        renderTerminal();
-      }
-      if (target === 'context') renderContext();
-    });
+    tab.addEventListener('click', () => activatePanelTab(tab.dataset.tab));
   }
+  $('#browser-back')?.addEventListener('click', () => { api.invoke('browser:back').catch(() => {}); });
+  $('#browser-forward')?.addEventListener('click', () => { api.invoke('browser:forward').catch(() => {}); });
+  $('#browser-reload')?.addEventListener('click', () => { api.invoke('browser:reload').catch(() => {}); });
+  $('#browser-go')?.addEventListener('click', () => { navigateBrowser(); });
+  $('#browser-url')?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      navigateBrowser();
+    }
+  });
+  $('#browser-ext')?.addEventListener('click', () => {
+    const url = state.browserState?.url || $('#browser-url')?.value?.trim();
+    if (url) api.invoke('shell:open-external', url).catch(() => {});
+  });
+  if (typeof window.ResizeObserver === 'function' && $('#browser-viewport')) {
+    new window.ResizeObserver(() => syncBrowserView()).observe($('#browser-viewport'));
+  }
+  window.addEventListener('resize', syncBrowserView);
 
   $('#terminal-run').addEventListener('click', runTerminal);
+  $('#terminal-stop').addEventListener('click', () => {
+    const tab = activeTerminal();
+    if (!tab || !state.session) return;
+    api.invoke('terminal:interrupt', { sessionId: state.session.id, tabId: tab.id })
+      .then(() => appendTerminal('^C\n'))
+      .catch((error) => appendTerminal(`${error.message}\n`, 'err-line'));
+  });
   $('#terminal-new').addEventListener('click', () => { newTerminalTab().catch((error) => toast(error.message)); });
   $('#terminal-cmd').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') runTerminal();
@@ -2616,7 +2817,11 @@ async function runTerminal() {
 
 async function selectProjectFolder(folder) {
   if (!folder) return;
+  if (state.surface === 'chat') {
+    await applySurface('code', true);
+  }
   state.project = folder;
+  if (folder !== state.info?.chatRoot) state.codeProject = folder;
   state.projectFiles = null;
   if (state.session) {
     await api.invoke('sessions:update', { id: state.session.id, cwd: folder });
@@ -2665,13 +2870,23 @@ async function init() {
   state.keys = keys;
   state.sessions = sessions.sessions;
   state.activeId = sessions.activeId;
-  state.project = info.project;
+  state.codeProject = (info.project && info.project !== info.chatRoot) ? info.project : '';
+  state.project = state.surface === 'chat' ? (info.chatRoot || info.project) : (state.codeProject || info.project);
 
-  if (state.activeId) {
-    const session = await api.invoke('sessions:get', state.activeId);
+  const matchingSession = (state.activeId && state.sessions.find((s) => s.id === state.activeId && sessionSurface(s) === state.surface))
+    || state.sessions.find((s) => sessionSurface(s) === state.surface);
+
+  if (matchingSession) {
+    const session = await api.invoke('sessions:get', matchingSession.id);
     if (session) {
       state.session = session;
-      state.project = session.cwd || state.project;
+      state.activeId = session.id;
+      if (sessionSurface(session) === 'code' && session.cwd && session.cwd !== info.chatRoot) {
+        state.project = session.cwd;
+        state.codeProject = session.cwd;
+      } else {
+        state.project = info.chatRoot || session.cwd;
+      }
       state.changes = (session.changes || []).filter((change) => change.file);
       state.terminal = session.terminal || [];
       try {
@@ -2683,8 +2898,12 @@ async function init() {
     }
   }
   if (!state.session) {
-    state.session = await api.invoke('sessions:create', { cwd: state.project });
+    state.session = await api.invoke('sessions:create', {
+      cwd: state.surface === 'chat' ? null : (state.codeProject || state.project),
+      surface: state.surface,
+    });
     state.activeId = state.session.id;
+    state.project = state.session.cwd;
     await refreshSessions();
   }
 

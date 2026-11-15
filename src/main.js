@@ -15,6 +15,7 @@ const { HooksManager } = require('./engine/hooks');
 const { AgentRegistry } = require('./engine/agents');
 const { providerList, testKey, fetchProviderModels, PROVIDERS } = require('./engine/providers');
 const omnirouteHelper = require('./omniroute');
+const { BrowserPanel } = require('./browser');
 
 const PROCESS_STARTED = Date.now();
 const APP_NAME = 'CAELIX';
@@ -38,6 +39,7 @@ if (SELF_CHECK) {
 }
 
 let win = null;
+let browserPanel = null;
 let keys = null;
 let sessions = null;
 let settings = null;
@@ -215,6 +217,7 @@ function createWindow() {
   });
 
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  browserPanel = new BrowserPanel(win, (event) => emit(event));
   win.once('ready-to-show', () => {
     windowReadyMs = Date.now() - PROCESS_STARTED;
     win.show();
@@ -319,12 +322,20 @@ function sessionSummary(session) {
     id: session.id,
     title: session.title,
     cwd: session.cwd,
+    surface: session.surface || null,
     provider: session.provider,
     model: session.model,
     mode: session.mode,
     updatedAt: session.updatedAt,
     createdAt: session.createdAt,
   };
+}
+
+// Chats live in their own folder, never inside a code project.
+function chatRoot() {
+  const dir = path.join(os.homedir(), 'Documents', 'CAELIX Chats');
+  try { fs.mkdirSync(dir, { recursive: true }); } catch { /* best effort */ }
+  return dir;
 }
 
 function registerIpc() {
@@ -338,6 +349,7 @@ function registerIpc() {
     selfcheck: SELF_CHECK,
     userData: userData(),
     project: projectPath(),
+    chatRoot: chatRoot(),
     windowReadyMs,
     firstPaintMs,
     encryption: safeStorage.isEncryptionAvailable(),
@@ -495,8 +507,15 @@ function registerIpc() {
   ipcMain.handle('sessions:get', (_event, id) => sessions.get(id));
 
   ipcMain.handle('sessions:create', (_event, input = {}) => {
+    const surface = input.surface === 'chat' || input.surface === 'code'
+      ? input.surface
+      : settings.get('surface', 'code');
+    const codeDir = input.cwd && input.cwd !== chatRoot() ? input.cwd : projectPath();
     const session = sessions.create({
-      cwd: input.cwd || projectPath(),
+      // Chat-surface chats never inherit a code project folder; they live in
+      // their own space so the two never dilute each other.
+      cwd: surface === 'chat' ? chatRoot() : codeDir,
+      surface,
       provider: input.provider || (SELF_CHECK ? 'simulator' : 'gemini'),
       model: input.model || (SELF_CHECK ? 'sim-1' : 'gemini-2.5-flash'),
       mode: input.mode || 'ask',
@@ -526,6 +545,10 @@ function registerIpc() {
     const allowed = {};
     for (const key of ['provider', 'model', 'mode', 'cwd', 'title']) {
       if (patch[key] !== undefined) allowed[key] = patch[key];
+    }
+    if (patch.surface === 'chat' || patch.surface === 'code') {
+      allowed.surface = patch.surface;
+      if (patch.surface === 'chat') allowed.cwd = chatRoot();
     }
     const session = sessions.update(id, allowed);
     if (session) emit({ type: 'session-updated', session: sessionSummary(session) });
@@ -692,6 +715,34 @@ function registerIpc() {
 
   ipcMain.handle('terminal:run', async (_event, { sessionId, command, tabId } = {}) => engine.runTerminal(sessionId, command, tabId));
 
+  ipcMain.handle('terminal:interrupt', (_event, { sessionId, tabId } = {}) => engine.interruptTerminal(sessionId, tabId));
+
+  ipcMain.handle('browser:state', () => (browserPanel ? browserPanel.state() : { visible: false, url: '', title: '', canBack: false, canForward: false, loading: false }));
+
+  ipcMain.handle('browser:navigate', async (_event, url) => {
+    if (!browserPanel) throw new Error('Browser panel is unavailable.');
+    return browserPanel.navigate(url);
+  });
+
+  ipcMain.handle('browser:back', () => (browserPanel ? browserPanel.back() : null));
+
+  ipcMain.handle('browser:forward', () => (browserPanel ? browserPanel.forward() : null));
+
+  ipcMain.handle('browser:reload', () => (browserPanel ? browserPanel.reload() : null));
+
+  ipcMain.handle('browser:show', (_event, rect) => {
+    if (!browserPanel) return null;
+    if (rect) browserPanel.setBounds(rect);
+    return browserPanel.show();
+  });
+
+  ipcMain.handle('browser:hide', () => (browserPanel ? browserPanel.hide() : null));
+
+  ipcMain.handle('browser:bounds', (_event, rect) => {
+    browserPanel?.setBounds(rect);
+    return true;
+  });
+
   ipcMain.handle('shell:open-external', (_event, url) => {
     if (/^https?:/i.test(url)) return shell.openExternal(url);
     return false;
@@ -721,6 +772,7 @@ async function setup() {
     askUser: requestQuestion,
     checkpointDir: path.join(userData(), 'checkpoints'),
     claudePath: path.join(os.homedir(), '.local', 'bin', 'claude'),
+    browser: () => browserPanel,
   });
 
   if (SELF_CHECK) {
@@ -763,6 +815,7 @@ if (!gotLock && !SELF_CHECK) {
     if (process.platform !== 'darwin' || SELF_CHECK) app.quit();
   });
   app.on('before-quit', () => {
+    try { browserPanel?.dispose(); } catch { /* best effort */ }
     try { engine?.dispose(); } catch { /* best effort */ }
     try { omnirouteHelper.stop(); } catch { /* best effort */ }
   });
