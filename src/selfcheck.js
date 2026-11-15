@@ -240,9 +240,51 @@ async function run(context) {
     await step('choose the keyless simulator model', async () => {
       await click('#model-chip');
       await waitFor('!document.querySelector("#model-menu").classList.contains("hidden")', 4000, 'model menu');
+      await evaluate(`(() => {
+        const el = document.querySelector('#model-search');
+        if (!el) throw new Error('Missing #model-search');
+        window.__modelSearchNode = el;
+        el.focus();
+      })()`);
+      for (const ch of 'free') {
+        win.webContents.sendInputEvent({ type: 'char', keyCode: ch });
+        await sleep(25);
+      }
+      const typed = await evaluate(`(() => {
+        const el = document.querySelector('#model-search');
+        return {
+          sameNode: el === window.__modelSearchNode,
+          value: el?.value,
+          start: el?.selectionStart,
+          end: el?.selectionEnd
+        };
+      })()`);
+      if (!typed.sameNode || typed.value !== 'free' || typed.start !== 4 || typed.end !== 4) {
+        throw new Error(`Model search caret broke while typing: ${JSON.stringify(typed)}`);
+      }
+      await evaluate(`(() => {
+        const el = document.querySelector('#model-search');
+        el.focus();
+        el.setSelectionRange(2, 2);
+      })()`);
+      win.webContents.sendInputEvent({ type: 'char', keyCode: 'X' });
+      await sleep(25);
+      const midEdit = await evaluate(`(() => {
+        const el = document.querySelector('#model-search');
+        const value = el?.value;
+        const start = el?.selectionStart;
+        el.value = '';
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        delete window.__modelSearchNode;
+        return { value, start };
+      })()`);
+      if (midEdit.value !== 'frXee' || midEdit.start !== 3) {
+        throw new Error(`Model search mid-word cursor edit failed: ${JSON.stringify(midEdit)}`);
+      }
+      await waitFor('document.querySelector("[data-provider=\\"simulator\\"][data-model=\\"sim-1\\"]")', 4000, 'simulator model option');
       await click('[data-provider="simulator"][data-model="sim-1"]');
       await waitFor('document.querySelector("#model-chip").textContent === "sim-1"', 5000, 'simulator model');
-      return 'sim-1';
+      return 'sim-1 (search cursor preserved)';
     });
 
     await step('favourite a model and pin it in the picker', async () => {

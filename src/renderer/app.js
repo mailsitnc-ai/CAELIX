@@ -1263,7 +1263,7 @@ function appendError(message) {
     event.stopPropagation();
     const menu = $('#model-menu');
     menu.classList.remove('hidden');
-    renderModelMenu();
+    renderModelMenu('', { focus: true });
   });
   attachCopyButton(actions.querySelector('[data-err-action="copy"]'), () => message);
   card.appendChild(actions);
@@ -1724,7 +1724,7 @@ async function runSlashCommand(raw) {
       } else {
         const menu = $('#model-menu');
         menu.classList.remove('hidden');
-        renderModelMenu();
+        renderModelMenu('', { focus: true });
       }
       return true;
     }
@@ -2186,17 +2186,65 @@ function favouriteEntries(filter = '') {
   return entries;
 }
 
-function renderModelMenu(filter = '') {
+function ensureModelMenuShell(menu) {
+  if ($('#model-list', menu)) return;
+  menu.innerHTML = [
+    '<div class="pop-head-row"><input class="pop-search" id="model-search" placeholder="Search models"><button id="model-refresh" class="pop-refresh" type="button" title="Refresh live model catalog">Refresh</button></div>',
+    '<div id="model-list"></div>',
+    '<div class="pop-custom"><input id="custom-model" placeholder="Use any model ID"><button id="custom-model-use" type="button">Use</button></div>'
+  ].join('');
+  const search = $('#model-search', menu);
+  search?.addEventListener('input', () => renderModelMenu());
+  $('#model-refresh', menu)?.addEventListener('click', async () => {
+    const pid = state.session?.provider || 'nvidia';
+    const btn = $('#model-refresh', menu);
+    btn.textContent = '…';
+    btn.disabled = true;
+    try {
+      await syncProviderCatalogs(pid === 'simulator' ? null : pid);
+      renderModelMenu();
+      toast('Updated live model list.');
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      btn.textContent = 'Refresh';
+      btn.disabled = false;
+    }
+  });
+  const applyCustomModel = async () => {
+    const input = $('#custom-model', menu);
+    const value = input?.value.trim();
+    if (!value || !state.session) return;
+    await chooseModel(state.session.provider, value);
+    menu.classList.add('hidden');
+  };
+  $('#custom-model-use', menu)?.addEventListener('click', applyCustomModel);
+  $('#custom-model', menu)?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      applyCustomModel();
+    }
+  });
+}
+
+function renderModelMenu(filter = null, options = {}) {
   const menu = $('#model-menu');
+  ensureModelMenuShell(menu);
+  const search = $('#model-search', menu);
+  const list = $('#model-list', menu);
+  if (typeof filter === 'string' && search && search.value !== filter) {
+    search.value = filter;
+  }
+  const activeFilter = typeof filter === 'string' ? filter : (search?.value || '');
   if (!state.modelsAutoSynced && !state.info?.selfcheck) {
     state.modelsAutoSynced = true;
     syncProviderCatalogs().then(() => {
-      if (!menu.classList.contains('hidden')) renderModelMenu($('#model-search')?.value || '');
+      if (!menu.classList.contains('hidden')) renderModelMenu();
     }).catch(() => {});
   }
-  const query = filter.trim().toLowerCase();
-  const favourites = favouriteEntries(filter);
-  const chunks = [`<div class="pop-head-row"><input class="pop-search" id="model-search" placeholder="Search models" value="${escapeHtml(filter)}"><button id="model-refresh" class="pop-refresh" type="button" title="Refresh live model catalog">Refresh</button></div>`];
+  const query = activeFilter.trim().toLowerCase();
+  const favourites = favouriteEntries(activeFilter);
+  const chunks = [];
   if (favourites.length) {
     chunks.push(`<div class="pop-section">Favourites (${favourites.length})</div>`);
     for (const { provider, model } of favourites) {
@@ -2218,29 +2266,11 @@ function renderModelMenu(filter = '') {
       chunks.push(`<button class="pop-item${active ? ' active' : ''}" data-provider="${provider.id}" data-model="${escapeHtml(model)}"><span class="pop-dot" style="background:${provider.color}"></span><span><span class="pop-title">${escapeHtml(model)}</span><span class="pop-sub">${escapeHtml(sub)}</span></span><span class="pop-star${fav ? ' filled' : ''}" title="${fav ? 'Remove from favourites' : 'Add to favourites'}">★</span></button>`);
     }
   }
-  chunks.push('<div class="pop-custom"><input id="custom-model" placeholder="Use any model ID"><button id="custom-model-use">Use</button></div>');
-  menu.innerHTML = chunks.join('');
-  const search = $('#model-search');
-  if (search) {
-    search.addEventListener('input', () => renderModelMenu(search.value));
-    search.focus();
+  if (!chunks.length) {
+    chunks.push('<div class="pop-section">No matching models</div>');
   }
-  $('#model-refresh')?.addEventListener('click', async () => {
-    const pid = state.session?.provider || 'nvidia';
-    const btn = $('#model-refresh');
-    btn.textContent = '…';
-    btn.disabled = true;
-    try {
-      await syncProviderCatalogs(pid === 'simulator' ? null : pid);
-      renderModelMenu($('#model-search')?.value || '');
-      toast('Updated live model list.');
-    } catch (error) {
-      toast(error.message);
-      btn.textContent = 'Refresh';
-      btn.disabled = false;
-    }
-  });
-  for (const item of $$('.pop-item', menu)) {
+  list.innerHTML = chunks.join('');
+  for (const item of $$('.pop-item', list)) {
     item.querySelector('.pop-star')?.addEventListener('click', async (event) => {
       event.stopPropagation();
       await toggleFavourite(item.dataset.provider, item.dataset.model);
@@ -2250,12 +2280,9 @@ function renderModelMenu(filter = '') {
       menu.classList.add('hidden');
     });
   }
-  $('#custom-model-use').addEventListener('click', async () => {
-    const value = $('#custom-model').value.trim();
-    if (!value) return;
-    await chooseModel(state.session.provider, value);
-    menu.classList.add('hidden');
-  });
+  if (options.focus && search && !menu.classList.contains('hidden')) {
+    search.focus();
+  }
 }
 
 async function chooseModel(provider, model) {
@@ -2582,13 +2609,13 @@ function bind() {
     $('#mode-menu').classList.add('hidden');
     const menu = $('#model-menu');
     menu.classList.toggle('hidden');
-    if (!menu.classList.contains('hidden')) renderModelMenu();
+    if (!menu.classList.contains('hidden')) renderModelMenu('', { focus: true });
   });
   $('#composer-model').addEventListener('click', (event) => {
     event.stopPropagation();
     const menu = $('#model-menu');
     menu.classList.toggle('hidden');
-    if (!menu.classList.contains('hidden')) renderModelMenu();
+    if (!menu.classList.contains('hidden')) renderModelMenu('', { focus: true });
   });
   $('#mode-chip').addEventListener('click', (event) => {
     event.stopPropagation();

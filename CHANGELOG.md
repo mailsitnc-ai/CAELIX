@@ -1,5 +1,11 @@
 # CAELIX changelog
 
+## 0.1.18 — Preserve model search input and cursor position while typing
+
+- **Root cause fixed (`src/renderer/app.js`):** Every keystroke in `#model-search` previously called `renderModelMenu(search.value)` which overwrote all of `#model-menu` (`menu.innerHTML = ...`) and re-called `search.focus()`, destroying the `<input>` element after each character and resetting `selectionStart` / `selectionEnd` back to `0` (causing words like `"free"` to come out backwards as `"eerf"` and blocking cursor edits between letters).
+- **Fixed:** Split `#model-menu` into a persistent shell (`ensureModelMenuShell` keeping `.pop-head-row` with `#model-search` / `#model-refresh`, `#model-list`, and `.pop-custom` with `#custom-model` / `#custom-model-use`) so filtering, favourite toggles, and background catalog syncs only re-render `#model-list`, resetting `#model-refresh` cleanly in `finally`, adding `Enter` support for custom model IDs, and keeping `#model-search` DOM identity, focus, and cursor position intact.
+- **Verified:** Added a real Chromium `sendInputEvent` typing and mid-word caret insertion check (`"free"` -> `"frXee"`) in `src/selfcheck.js`, rebuilt `dist/CAELIX.app`, and ran `doctor`, `verify_features.js`, `terminal-probe.js`, and `selfcheck`.
+
 ## 0.1.17 — Fix AI chat titles on reasoning models (no raw question overwrite)
 
 - **Root cause fixed (`src/engine/index.js`, `src/main.js`):** Live probing against NVIDIA (`nvidia/nemotron-3.5-lightning-30b-a3b`), Groq (`openai/gpt-oss-20b`), and OpenRouter (`openrouter/free`) showed that passing `maxTokens: 48` starved reasoning models (`reasoning_content` consumed all 48 tokens and returned empty `content`), forcing `maybeGenerateTitle()` back to the prompt text while `chat:send` also prematurely wrote the raw first question over `'New chat'`.
