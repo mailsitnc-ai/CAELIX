@@ -428,6 +428,88 @@ class McpManager {
     return defs;
   }
 
+  listSummaries() {
+    const out = [];
+    for (const [fullName, entry] of this.toolMap) {
+      out.push({
+        name: fullName,
+        server: entry.server.name,
+        rawName: entry.toolName,
+        description: String(entry.definition.description || entry.toolName).replace(/\s+/g, ' ').trim().slice(0, 120),
+      });
+    }
+    return out;
+  }
+
+  searchTools(query = '', limit = 6) {
+    const maxLimit = Math.min(15, Math.max(1, Number(limit) || 6));
+    const raw = String(query || '').trim();
+    const total = this.toolMap.size;
+    if (!total) return { total: 0, matches: [] };
+
+    const formatEntry = (fullName, entry) => {
+      const schema = entry.definition.inputSchema && typeof entry.definition.inputSchema === 'object'
+        ? entry.definition.inputSchema
+        : { type: 'object', properties: {} };
+      const propKeys = schema.properties && typeof schema.properties === 'object' ? Object.keys(schema.properties) : [];
+      const required = Array.isArray(schema.required) ? schema.required : [];
+      return {
+        name: fullName,
+        server: entry.server.name,
+        rawName: entry.toolName,
+        description: String(entry.definition.description || entry.toolName).replace(/\s+/g, ' ').trim().slice(0, 220),
+        required,
+        parameters: propKeys.slice(0, 16),
+      };
+    };
+
+    if (/^select\s*:/i.test(raw)) {
+      const requested = raw.replace(/^select\s*:/i, '').split(',').map((s) => s.trim()).filter(Boolean);
+      const matches = [];
+      for (const name of requested) {
+        const entry = this.toolMap.get(name);
+        if (entry) matches.push(formatEntry(name, entry));
+      }
+      return { total, matches: matches.slice(0, maxLimit) };
+    }
+
+    if (!raw || raw === '*') {
+      const matches = [];
+      for (const [fullName, entry] of this.toolMap) {
+        matches.push(formatEntry(fullName, entry));
+        if (matches.length >= maxLimit) break;
+      }
+      return { total, matches };
+    }
+
+    const qLower = raw.toLowerCase();
+    const tokens = [...new Set(qLower.split(/[\s,:/._-]+/).filter((t) => t.length >= 2))];
+    const scored = [];
+    for (const [fullName, entry] of this.toolMap) {
+      const fullLower = fullName.toLowerCase();
+      const rawLower = String(entry.toolName || '').toLowerCase();
+      const serverLower = String(entry.server?.name || '').toLowerCase();
+      const descLower = String(entry.definition?.description || '').toLowerCase();
+      let score = 0;
+      if (fullLower === qLower || rawLower === qLower) score += 40;
+      if (fullLower.includes(qLower)) score += 15;
+      if (rawLower.includes(qLower)) score += 12;
+      for (const tok of tokens) {
+        if (rawLower === tok || fullLower === tok) score += 15;
+        if (rawLower.includes(tok)) score += 8;
+        if (fullLower.includes(tok)) score += 5;
+        if (serverLower.includes(tok)) score += 4;
+        if (descLower.includes(tok)) score += 2;
+      }
+      if (score > 0) scored.push({ score, fullName, entry });
+    }
+    scored.sort((a, b) => b.score - a.score || a.fullName.localeCompare(b.fullName));
+    return {
+      total,
+      matches: scored.slice(0, maxLimit).map((item) => formatEntry(item.fullName, item.entry)),
+    };
+  }
+
   isMcpTool(name) {
     return this.toolMap.has(name) || String(name).startsWith('mcp__');
   }

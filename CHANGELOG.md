@@ -1,5 +1,11 @@
 # CAELIX changelog
 
+## 0.1.20 — Lazy ToolSearch MCP loading & Code-only higher turn budgets
+
+- **Lazy `ToolSearch` MCP loading (`src/engine/mcp.js`, `src/engine/index.js`, `src/renderer/app.js`):** Added `McpManager.searchTools()` and dynamic `tool_search` loading when more than 10 MCP tools are connected (such as REA's large toolset). Instead of injecting 100+ schemas on every request, CAELIX keeps only `tool_search` plus matched tools loaded per chat, displays a compact deferred-catalog summary in the system prompt, renders `Tool Search` cards cleanly, and preserves `23` built-in CLI tools.
+- **Higher turn budgets for Code only + repeat-loop guard (`src/engine/index.js`):** Raised Code-surface turn budgets from `15` to `50` rounds (`runSubagent` up to `16` rounds, default `8` in Code) while keeping Chat mode at `15` rounds (`runSubagent` up to `8`, default `4`). Added an automatic repeat-loop detector that nudges after 3 identical consecutive tool rounds and halts + synthesizes on the 4th duplicate round.
+- **Verified:** Added full mock-server + stdio MCP tests in `checks/verify_features.js` covering lazy `tool_search` deferral/on-demand loading, 50-round Code vs. 15-round Chat budgets, and repeat-loop protection; rebuilt `dist/CAELIX.app` (`0.1.20`) and ran `doctor`, `verify_features.js`, `terminal-probe.js`, and `selfcheck`.
+
 ## 0.1.19 — Save and restore Code folder chats across close and reopen
 
 - **Immediate turn persistence (`src/engine/index.js`, `src/store.js`, `src/main.js`):** Each user message is now written to `sessions.json` immediately when sent (`appendMessage` updating `activeId`) instead of waiting until the end of the multi-round AI turn, while `SessionStore.list()` and `sessionSummary()` expose visible `messageCount` so saved chats are distinguished from empty `New chat` stubs.

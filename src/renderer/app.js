@@ -72,7 +72,7 @@ const MODES = [
 const TOOL_LABELS = {
   read_file: 'Read', write_file: 'Write', edit_file: 'Edit', list_dir: 'List',
   glob: 'Glob', grep: 'Grep', bash: 'Terminal', todo_write: 'Tasks', web_fetch: 'Fetch',
-  web_search: 'Search', notebook_edit: 'Notebook', skill: 'Skill',
+  web_search: 'Search', notebook_edit: 'Notebook', skill: 'Skill', tool_search: 'Tool Search',
   multi_edit: 'Multi-edit', task_start: 'Task', task_list: 'Tasks', task_stop: 'Stop task',
   ask_user: 'Question', present_plan: 'Plan', subagent: 'Subagent',
 };
@@ -523,7 +523,7 @@ function toolCard(options) {
   const card = document.createElement('div');
   card.className = `tool-card${state.viewMode === 'verbose' ? ' expanded' : ''}`;
   card.id = `tool-${id}`;
-  const target = input?.path || input?.command || input?.pattern || input?.url || input?.items?.length || '';
+  const target = input?.path || input?.command || input?.pattern || input?.query || input?.url || input?.items?.length || '';
   const label = TOOL_LABELS[name] || name;
   const statusText = status === 'running'
     ? '<span class="tool-spinner"></span>Running'
