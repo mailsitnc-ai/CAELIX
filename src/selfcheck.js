@@ -519,7 +519,7 @@ async function run(context) {
       const nvidiaModels = await evaluate('window.__caelixState.providers.find(p => p.id === "nvidia")?.models?.length || 0');
       if (nvidiaModels < 30) throw new Error(`Expected >= 30 NVIDIA models, got ${nvidiaModels}`);
       const groqModels = await evaluate('window.__caelixState.providers.find(p => p.id === "groq")?.models?.length || 0');
-      if (groqModels < 5) throw new Error(`Expected >= 5 Groq models, got ${groqModels}`);
+      if (groqModels < 4) throw new Error(`Expected >= 4 Groq models, got ${groqModels}`);
       await click('#keys-btn');
       await waitFor('!!document.querySelector("#key-input-groq")', 3000, 'groq key input in Keys modal');
       await click('#keys-close');

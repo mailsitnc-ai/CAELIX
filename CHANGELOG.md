@@ -1,5 +1,10 @@
 # CAELIX changelog
 
+## 0.1.12 — Groq catalog refresh after provider rotation
+
+- Live probing with a real stored Groq key showed Groq rotated its model catalog: `meta-llama/llama-4-scout-17b-16e-instruct`, `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `qwen/qwen3-32b`, `kimi-k2-instruct` and `groq/compound` now return `404` and no longer exist on current keys. The curated Groq list is rebuilt around the four models the catalog endpoint returns today, each verified streaming live (79-316 ms first reply): `openai/gpt-oss-20b` (new default), `qwen/qwen3.8-27b` (fastest, new high-headroom spillover target), `openai/gpt-oss-120b`, `allam-2-7b`. Quota-failover chains and `MODEL_NOTES` updated; rotated-out IDs are marked honestly in the notes.
+- Verified: `ALL 19 FEATURE VERIFICATIONS PASSED` (Groq checks moved to the live catalog) and the 25-step self-check passes with 0 errors.
+
 ## 0.1.11 — favourite models and readable Gemini errors
 
 - **Favourite models:** every row in the model picker now has a star. Starred models are pinned in a `Favourites` section at the top of the picker (each entry keeps its provider colour and note), the star state persists in encrypted user settings across restarts, and starring never switches the model. Covered by a new self-check step that stars, reopens the picker and proves it stayed.

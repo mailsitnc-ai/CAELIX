@@ -86,18 +86,15 @@ const PROVIDERS = {
     keyLabel: 'Groq API key',
     consoleUrl: 'https://console.groq.com/keys',
     baseUrl: 'https://api.groq.com/openai/v1/chat/completions',
+    // Verified live against a real Groq key on 2026-11-15 (probe: OK, 79-316 ms).
+    // Groq rotated its catalog: the llama-4/llama-3.3 IDs no longer exist.
     models: [
-      'meta-llama/llama-4-scout-17b-16e-instruct',
-      'llama-3.3-70b-versatile',
-      'qwen/qwen3-32b',
-      'llama-3.1-8b-instant',
-      'moonshotai/kimi-k2-instruct',
       'openai/gpt-oss-20b',
-      'openai/gpt-oss-120b',
       'qwen/qwen3.8-27b',
-      'groq/compound',
+      'openai/gpt-oss-120b',
+      'allam-2-7b',
     ],
-    defaultModel: 'meta-llama/llama-4-scout-17b-16e-instruct',
+    defaultModel: 'openai/gpt-oss-20b',
     color: '#f55036',
   },
   claude: {
@@ -130,12 +127,15 @@ const MODEL_NOTES = {
   'gemini-2.5-flash': 'Lightweight · High headroom · 1M context',
   'gemini-2.0-flash': 'Separate Gemini quota · 1M context',
   'gemini-2.5-pro': 'Heavy · Lower RPM/RPD · 1M context',
-  'llama-3.1-8b-instant': 'Best for limits · Highest Groq free TPM/RPM',
-  'meta-llama/llama-4-scout-17b-16e-instruct': 'Lightweight · Good tool caller · High TPM',
-  'llama-3.3-70b-versatile': 'Strong coder · Moderate free TPM',
-  'qwen/qwen3-32b': 'Compact coding · Separate Groq bucket',
-  'moonshotai/kimi-k2-instruct': 'Long-context tool caller · 128K',
+  'llama-3.1-8b-instant': 'Rotated out of Groq · Not on current keys',
+  'meta-llama/llama-4-scout-17b-16e-instruct': 'Rotated out of Groq · Not on current keys',
+  'llama-3.3-70b-versatile': 'Rotated out of Groq · Not on current keys',
+  'qwen/qwen3.8-27b': 'Fastest verified · High headroom · Separate Groq bucket',
+  'qwen/qwen3-32b': 'Rotated out of Groq · Not on current keys',
+  'moonshotai/kimi-k2-instruct': 'Rotated out of Groq · Not on current keys',
   'openai/gpt-oss-120b': 'Heavy · Eats free TPM quickly',
+  'openai/gpt-oss-20b': 'Fast tool caller · Good free TPM',
+  'allam-2-7b': 'Lightweight fallback · Verified live',
   'deepseek-ai/deepseek-v4.1-flash': 'Hangs on many accounts · Key test moves on after it stalls',
   'nvidia/llama-3.1-nemotron-70b-instruct': '40 RPM · Not on all NIM accounts',
   'nvidia/nemotron-3.5-lightning-30b-a3b': '40 RPM · Verified live · Lightweight & fast',
@@ -155,7 +155,7 @@ const MODEL_NOTES = {
 // Providers whose models carry separate RPM/TPM/RPD quota buckets.
 const MODEL_FAILOVER = {
   gemini: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'],
-  groq: ['meta-llama/llama-4-scout-17b-16e-instruct', 'llama-3.1-8b-instant', 'qwen/qwen3-32b'],
+  groq: ['openai/gpt-oss-20b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-120b'],
   openrouter: ['openrouter/free', 'qwen/qwen3-coder:free', 'meta-llama/llama-3.3-70b-instruct:free', 'google/gemma-3-27b-it:free'],
 };
 
@@ -165,7 +165,7 @@ const PROVIDER_HIGH_HEADROOM = {
   gemini: 'gemini-2.5-flash-lite',
   nvidia: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
   openrouter: 'openrouter/free',
-  groq: 'meta-llama/llama-4-scout-17b-16e-instruct',
+  groq: 'qwen/qwen3.8-27b',
 };
 
 function providerList(selfcheck) {
