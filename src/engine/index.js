@@ -810,17 +810,20 @@ class Engine {
         const status = Number(error.status || (String(error.message).match(/returned (\d{3})/) || [])[1] || 0);
         const isRateLimit = status === 429;
         const isKeyAuthOrQuota = isRateLimit || status === 401 || status === 402 || status === 403 || status === 404;
+        const isNvidiaStall = activeProviderId === 'nvidia'
+          && (status === 408 || /did not respond within/i.test(error.message));
         const retryable = isRateLimit || status === 408 || status >= 500
           || /fetch failed|network|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(error.message);
         const fast = process.env.CAELIX_FAST_RETRY === '1';
 
-        if (isKeyAuthOrQuota && !emitted) {
+        if ((isKeyAuthOrQuota || isNvidiaStall) && !emitted) {
           const coolMs = fast ? 120 : (isRateLimit ? (error.retryAfterMs || 60_000) : 300_000);
           const scope = isRateLimit && MODEL_FAILOVER[activeProviderId] ? 'model' : 'key';
-          if (status !== 404) this.markKeyCooldown(activeProviderId, picked.index, coolMs, activeModelId, scope);
+          // A stall is a model problem, not a key problem: never cool the key down for it.
+          if (!isNvidiaStall && status !== 404) this.markKeyCooldown(activeProviderId, picked.index, coolMs, activeModelId, scope);
 
-          // Level 1: try another healthy key within the same provider first (not for model-wide 404 unless another provider)
-          if (status !== 404 && pool.length > 1 && rotationCount < pool.length * 2) {
+          // Level 1: try another healthy key within the same provider first (not for model-wide 404 or a stall)
+          if (!isNvidiaStall && status !== 404 && pool.length > 1 && rotationCount < pool.length * 2) {
             const nextKey = this.pickKey(activeProviderId, activeModelId);
             if (!nextKey.allCooled) {
               rotationCount += 1;
@@ -836,10 +839,13 @@ class Engine {
           // Level 2 & 3: spill over to a higher-headroom sibling model or another saved provider
           triedTargets.add(`${activeProviderId}:${activeModelId}`);
           const candidates = this.listFailoverTargets(activeProviderId, activeModelId);
-          if (status === 404 && activeProviderId === 'nvidia') {
+          // NVIDIA 404s and stalls are model-level: try the models verified to
+          // serve this account class before spilling over to another provider.
+          if (activeProviderId === 'nvidia' && (status === 404 || isNvidiaStall)) {
             candidates.unshift(
-              { provider: 'nvidia', model: 'nvidia/llama-3.1-nemotron-70b-instruct', tier: 'sibling-model' },
-              { provider: 'nvidia', model: 'nv-mistralai/mistral-nemo-12b-instruct', tier: 'sibling-model' },
+              { provider: 'nvidia', model: 'nvidia/nemotron-3.5-lightning-30b-a3b', tier: 'sibling-model' },
+              { provider: 'nvidia', model: 'nvidia/nemotron-3.5-super-vl-120b-a12b', tier: 'sibling-model' },
+              { provider: 'nvidia', model: 'nvidia/nemotron-3-ultra-550b-a55b', tier: 'sibling-model' },
             );
           }
           if (switchCount < 6) {

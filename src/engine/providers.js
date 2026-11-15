@@ -38,18 +38,21 @@ const PROVIDERS = {
     consoleUrl: 'https://build.nvidia.com/',
     baseUrl: 'https://integrate.api.nvidia.com/v1/chat/completions',
     models: [
+      // Verified live against a real NIM key on 2026-11-15 (probe: OK twice each).
+      'nvidia/nemotron-3.5-lightning-30b-a3b',
+      'nvidia/nemotron-3.5-super-vl-120b-a12b',
+      'nvidia/nemotron-3-ultra-550b-a55b',
+      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+      'mistralai/mistral-large-4-1t-a52b',
+      'minimaxai/minimax-m3.1-flash',
+      // Catalog entries that 404 or hang on some accounts; kept for accounts that have them.
       'deepseek-ai/deepseek-v4.1-flash',
       'nvidia/nemotron-3-super-120b-a12b',
-      'nvidia/nemotron-3-ultra-550b-a55b',
-      'nvidia/nemotron-3.5-super-vl-120b-a12b',
-      'nvidia/nemotron-3.5-lightning-30b-a3b',
-      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
       'nvidia/nemotron-nano-3-30b-a3b',
       'nvidia/llama-3.1-nemotron-ultra-253b-v1',
       'nvidia/llama-3.1-nemotron-70b-instruct',
       'nvidia/llama-3.1-nemotron-51b-instruct',
       'nvidia/nemotron-4-340b-instruct',
-      'mistralai/mistral-large-4-1t-a52b',
       'mistralai/mistral-large-2-instruct',
       'mistralai/codestral-22b-instruct-v0.1',
       'mistralai/mistral-7b-instruct-v0.3',
@@ -57,7 +60,6 @@ const PROVIDERS = {
       'nv-mistralai/mistral-nemo-12b-instruct',
       'moonshotai/kimi-k2.6',
       'z-ai/glm-5.3-flash',
-      'minimaxai/minimax-m3.1-flash',
       'stepfun-ai/step-5-preview',
       'openai/gpt-oss-20b',
       'google/gemma-4-31b-it',
@@ -75,7 +77,7 @@ const PROVIDERS = {
       'databricks/dbrx-instruct',
       'ai21labs/jamba-1.5-large-instruct',
     ],
-    defaultModel: 'nvidia/llama-3.1-nemotron-70b-instruct',
+    defaultModel: 'nvidia/nemotron-3.5-lightning-30b-a3b',
     color: '#76b900',
   },
   groq: {
@@ -134,9 +136,13 @@ const MODEL_NOTES = {
   'qwen/qwen3-32b': 'Compact coding · Separate Groq bucket',
   'moonshotai/kimi-k2-instruct': 'Long-context tool caller · 128K',
   'openai/gpt-oss-120b': 'Heavy · Eats free TPM quickly',
-  'deepseek-ai/deepseek-v4.1-flash': '40 RPM · Requires NIM Public API access',
-  'nvidia/llama-3.1-nemotron-70b-instruct': '40 RPM · Stable public NIM default',
-  'nvidia/nemotron-3.5-lightning-30b-a3b': '40 RPM · Lightweight & fast',
+  'deepseek-ai/deepseek-v4.1-flash': 'Hangs on many accounts · Key test moves on after it stalls',
+  'nvidia/llama-3.1-nemotron-70b-instruct': '40 RPM · Not on all NIM accounts',
+  'nvidia/nemotron-3.5-lightning-30b-a3b': '40 RPM · Verified live · Lightweight & fast',
+  'nvidia/nemotron-3.5-super-vl-120b-a12b': '40 RPM · Verified live · Strong coder',
+  'nvidia/nemotron-3-ultra-550b-a55b': '40 RPM · Verified live · Largest NIM model',
+  'mistralai/mistral-large-4-1t-a52b': '40 RPM · Verified live · Large Mistral',
+  'minimaxai/minimax-m3.1-flash': '40 RPM · Verified live · Fast fallback',
   'nvidia/nemotron-nano-3-30b-a3b': '40 RPM · Lightweight & fast',
   'mistralai/codestral-22b-instruct-v0.1': '40 RPM · Fast compact coder',
   'openrouter/free': 'Free router · Does not spend credits',
@@ -157,7 +163,7 @@ const MODEL_FAILOVER = {
 const PROVIDER_SPILLOVER = ['gemini', 'nvidia', 'openrouter', 'groq'];
 const PROVIDER_HIGH_HEADROOM = {
   gemini: 'gemini-2.5-flash-lite',
-  nvidia: 'nvidia/llama-3.1-nemotron-70b-instruct',
+  nvidia: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
   openrouter: 'openrouter/free',
   groq: 'meta-llama/llama-4-scout-17b-16e-instruct',
 };
@@ -271,7 +277,7 @@ async function readError(response) {
     // keep raw body
   }
   if (response.status === 404 && /not found for account/i.test(detail)) {
-    detail = `${detail} — Model unavailable or account lacks NIM Public API Endpoints. Initialize your cloud profile at cloudaccounts.nvidia.com, switch models (e.g. nvidia/llama-3.1-nemotron-70b-instruct), or email help@build.nvidia.com.`;
+    detail = `${detail} — Model unavailable or account lacks NIM Public API Endpoints. Initialize your cloud profile at cloudaccounts.nvidia.com, switch models (e.g. nvidia/nemotron-3.5-lightning-30b-a3b), or email help@build.nvidia.com.`;
   }
   const err = new Error(`Provider returned ${response.status}${detail ? `: ${detail}` : ''}`);
   err.status = response.status;
@@ -462,10 +468,14 @@ async function streamOpenAICompatible(options) {
   }
 }
 
+// Verified-live models first: a key test should land on a model the account
+// can actually serve, not on catalog entries that hang or 404.
 const NVIDIA_TEST_FALLBACKS = [
-  'nvidia/llama-3.1-nemotron-70b-instruct',
-  'nv-mistralai/mistral-nemo-12b-instruct',
-  'mistralai/mistral-7b-instruct-v0.3',
+  'nvidia/nemotron-3.5-lightning-30b-a3b',
+  'nvidia/nemotron-3.5-super-vl-120b-a12b',
+  'nvidia/nemotron-3-ultra-550b-a55b',
+  'minimaxai/minimax-m3.1-flash',
+  'mistralai/mistral-large-4-1t-a52b',
 ];
 
 async function probeModel(meta, provider, apiKey, targetModel) {
@@ -491,7 +501,9 @@ async function probeModel(meta, provider, apiKey, targetModel) {
     return { ok: true, model: targetModel };
   } catch (error) {
     if (error.name === 'AbortError') {
-      throw new Error(`${meta.name} (${targetModel}) timed out after 15s during key test.`);
+      const err = new Error(`${meta.name} (${targetModel}) timed out after 15s during key test.`);
+      err.status = 408;
+      throw err;
     }
     throw error;
   } finally {
@@ -516,7 +528,12 @@ async function testKey(provider, apiKey, model = null) {
       };
     } catch (error) {
       lastError = error;
-      if (Number(error.status) !== 404) throw error;
+      const status = Number(error.status || 0);
+      // Key-level failures stop the probe at once; model-level ones (404 not
+      // on this account, or a model that hangs) just move to the next candidate.
+      const keyLevel = status === 401 || status === 402 || status === 403;
+      const modelLevel = status === 404 || status === 408;
+      if (keyLevel || !modelLevel) throw error;
     }
   }
   throw lastError;

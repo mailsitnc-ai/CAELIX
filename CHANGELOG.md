@@ -1,5 +1,13 @@
 # CAELIX changelog
 
+## 0.1.10 — NVIDIA live-model diagnosis and stall failover
+
+- **Diagnosed the real NVIDIA problem with a live probe of every curated model** (twice each, using the stored key through CAELIX's own KeyStore — the key was never printed): 6 models serve requests (`nvidia/nemotron-3.5-lightning-30b-a3b`, `nvidia/nemotron-3.5-super-vl-120b-a12b`, `nvidia/nemotron-3-ultra-550b-a55b`, `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`, `mistralai/mistral-large-4-1t-a52b`, `minimaxai/minimax-m3.1-flash`); 8 curated IDs return `404 Not found for account`; `deepseek-ai/deepseek-v4.1-flash` and `z-ai/glm-5.3-flash` hang indefinitely even with a 60 s window. The key itself was valid the whole time (`/v1/models` returns 62 entries).
+- Catalog reordered **verified-live models first**; the NVIDIA default is now `nvidia/nemotron-3.5-lightning-30b-a3b` and the high-headroom spillover target is `nvidia/nemotron-3.5-super-vl-120b-a12b`. Hanging and 404ing IDs stay listed at the bottom for accounts that do have them, with honest `MODEL_NOTES`.
+- **Key test resilience:** an NVIDIA probe now walks past model-level failures — `404` *and* stalls (`408`) — to the next candidate and reports which model it landed on (`fallbackFrom`); only key-level errors (`401/402/403`) abort the test immediately. Previously one hanging model failed the whole key test even though other models worked.
+- **Runtime stall failover:** when an NVIDIA model stalls (first-byte timeout), the engine now treats it as a model-level failure, tries the verified sibling models, and never puts the key on cooldown for it. Previously a stall threw immediately with no failover.
+- Verified live with the stored key: real streaming answer ("ready"), real tool call (`read_file` emitted), and the stall error correctly recognized by the new failover signal; `ALL 19 FEATURE VERIFICATIONS PASSED`; 24-step self-check with 0 errors (window 513 ms).
+
 ## 0.1.9 (Rate-limit key rotation, permission safety, Copy buttons, Task Summaries & `/reset`)
 
 - Added **Quota Saver & 3-level auto-failover** (`src/engine/providers.js`, `src/engine/index.js`):
