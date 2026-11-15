@@ -1257,7 +1257,7 @@ function appendError(message) {
   card.appendChild(msg);
   const actions = document.createElement('div');
   actions.className = 'error-actions';
-  const showRecovery = /401|403|404|408|429|rate.?limit|key|billing|free tier|quota|permission_denied|not found for account|did not respond|timed out|stalled/i.test(message);
+  const showRecovery = /401|402|403|404|408|429|502|503|504|rate.?limit|key|billing|free tier|quota|permission_denied|not found for account|did not respond|timed out|stalled/i.test(message);
   actions.innerHTML = `${showRecovery ? '<button type="button" data-err-action="keys">Open Keys</button><button type="button" data-err-action="model">Switch Model</button>' : ''}<button type="button" data-err-action="copy">Copy error</button>`;
   actions.querySelector('[data-err-action="keys"]')?.addEventListener('click', openKeys);
   actions.querySelector('[data-err-action="model"]')?.addEventListener('click', (event) => {

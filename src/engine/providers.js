@@ -104,18 +104,18 @@ const PROVIDERS = {
     consoleUrl: 'https://coarena.ai/account/api',
     baseUrl: 'https://coarena.ai/api/v1/chat/completions',
     models: [
+      'gpt-6-luna',
+      'gemini-3-8-flash',
+      'deepseek-v4-1-flash-1017',
       'gpt-6-1-sol',
       'gpt-6-1-terra',
       'gpt-6-astra',
-      'gpt-6-luna',
       'gemini-4-carbon',
       'gemini-4-argon',
-      'gemini-3-8-flash',
-      'deepseek-v4-1-flash-1017',
       'grok-4-7',
       'kimi-k3-1-pro',
     ],
-    defaultModel: 'gpt-6-1-sol',
+    defaultModel: 'gpt-6-luna',
     color: '#06b6d4',
   },
   omniroute: {
@@ -195,16 +195,16 @@ const MODEL_NOTES = {
   'meta-llama/llama-3.3-70b-instruct:free': 'Free · Strong general & code',
   'google/gemma-3-27b-it:free': 'Free · Fast lightweight backup',
   'google/gemini-2.5-flash': 'Paid credits · Lightweight · 1M context',
-  'gpt-6-1-sol': 'Coarena · OpenAI · 128k context · Vision & tools',
-  'gpt-6-1-terra': 'Coarena · OpenAI · 128k context · Vision & tools',
-  'gpt-6-astra': 'Coarena · OpenAI · 128k context · Vision & tools',
-  'gpt-6-luna': 'Coarena · OpenAI · 128k context · Vision & tools',
-  'gemini-4-carbon': 'Coarena · Google · 128k context · Vision & tools',
-  'gemini-4-argon': 'Coarena · Google · 128k context · Vision & tools',
-  'gemini-3-8-flash': 'Coarena · Google · 128k context · Fast vision & tools',
-  'deepseek-v4-1-flash-1017': 'Coarena · DeepSeek · 128k context · Tools & reasoning',
-  'grok-4-7': 'Coarena · xAI · 128k context · Vision & tools',
-  'kimi-k3-1-pro': 'Coarena · Moonshot · 128k context · Vision & tools',
+  'gpt-6-luna': 'Free tier · Coarena · OpenAI · 128k · Vision & tools',
+  'gemini-3-8-flash': 'Free tier · Coarena · Google · 128k · Fast vision & tools',
+  'deepseek-v4-1-flash-1017': 'Free tier · Coarena · DeepSeek · 128k · Tools & reasoning',
+  'gpt-6-1-sol': 'Paid credits · Coarena · OpenAI · 128k · Vision & tools',
+  'gpt-6-1-terra': 'Paid credits · Coarena · OpenAI · 128k · Vision & tools',
+  'gpt-6-astra': 'Paid credits · Coarena · OpenAI · 128k · Vision & tools',
+  'gemini-4-carbon': 'Paid credits · Coarena · Google · 128k · Vision & tools',
+  'gemini-4-argon': 'Paid credits · Coarena · Google · 128k · Vision & tools',
+  'grok-4-7': 'Paid credits · Coarena · xAI · 128k · Vision & tools',
+  'kimi-k3-1-pro': 'Paid credits · Coarena · Moonshot · 128k · Vision & tools',
 };
 
 // Providers whose models carry separate RPM/TPM/RPD quota buckets.
@@ -212,6 +212,7 @@ const MODEL_FAILOVER = {
   gemini: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'],
   groq: ['openai/gpt-oss-20b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-120b'],
   openrouter: ['openrouter/free', 'qwen/qwen3-coder:free', 'meta-llama/llama-3.3-70b-instruct:free', 'google/gemma-3-27b-it:free'],
+  coarena: ['gpt-6-luna', 'gemini-3-8-flash', 'deepseek-v4-1-flash-1017'],
 };
 
 // Order when spilling over across different providers that have saved keys.
@@ -352,6 +353,9 @@ function friendlyDetail(provider, status, detail) {
     if (status === 401) {
       return 'Coarena rejected the API key. Copy or create an active key at https://coarena.ai/account/api and save it here in Keys.';
     }
+    if (status === 402) {
+      return text || 'This Coarena model requires paid credits. Free accounts can use gpt-6-luna, gemini-3-8-flash, and deepseek-v4-1-flash-1017.';
+    }
     if (status === 403) {
       if (/terms/i.test(text)) {
         return 'Coarena requires accepting its Model API terms once at https://coarena.ai/account/api before this key can run models.';
@@ -361,10 +365,25 @@ function friendlyDetail(provider, status, detail) {
       }
     }
     if (status === 429) {
-      return `${text ? `${text} — ` : ''}Coarena free daily usage ($5/day) or rate limit reached. Request a higher limit in Coarena or switch models/providers.`;
+      return `${text ? `${text} — ` : ''}Coarena daily free limit or rate limit reached. Request a higher limit in Coarena or switch models/providers.`;
     }
   }
   return text;
+}
+
+function cleanErrorDetail(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  if (/<(html|head|body|title|h1|center)\b/i.test(text)) {
+    const plain = text
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return plain.slice(0, 240);
+  }
+  return text.slice(0, 500);
 }
 
 async function readError(response, provider = null) {
@@ -374,7 +393,7 @@ async function readError(response, provider = null) {
   } catch {
     body = '';
   }
-  let detail = body.slice(0, 500);
+  let detail = cleanErrorDetail(body);
   try {
     let parsed = JSON.parse(body);
     if (typeof parsed === 'string') parsed = unwrapJson(parsed, 1);
@@ -383,7 +402,10 @@ async function readError(response, provider = null) {
       || (parsed && typeof parsed === 'object' ? parsed?.detail : '')
       || detail;
   } catch {
-    // keep raw body
+    // keep cleaned text body
+  }
+  if (response.status === 504 && (!detail || /504\s+gateway\s+time-?out/i.test(detail))) {
+    detail = 'Upstream gateway timed out (504). The selected provider or model took too long — try again or switch models.';
   }
   if (response.status === 404 && /not found for account/i.test(detail)) {
     detail = `${detail} — Model unavailable or account lacks NIM Public API Endpoints. Initialize your cloud profile at cloudaccounts.nvidia.com, switch models (e.g. nvidia/nemotron-3.5-lightning-30b-a3b), or email help@build.nvidia.com.`;
@@ -593,10 +615,9 @@ const NVIDIA_TEST_FALLBACKS = [
 ];
 
 const COARENA_TEST_FALLBACKS = [
-  'gpt-6-1-sol',
-  'gpt-6-astra',
-  'gemini-4-carbon',
+  'gpt-6-luna',
   'gemini-3-8-flash',
+  'deepseek-v4-1-flash-1017',
 ];
 
 async function probeModel(meta, provider, apiKey, targetModel) {
@@ -692,9 +713,10 @@ async function testKey(provider, apiKey, model = null) {
       lastError = error;
       const status = Number(error.status || 0);
       // Key-level failures stop the probe at once; model-level ones (404 not
-      // on this account, or a model that hangs) just move to the next candidate.
-      const keyLevel = status === 401 || status === 402 || status === 403;
-      const modelLevel = status === 404 || status === 408 || (provider === 'coarena' && status === 503);
+      // on this account, free-tier exclusion on a single model, or a stall) move on.
+      const coarenaFreeTierSkip = provider === 'coarena' && status === 402 && /not part of the free tier/i.test(error.message);
+      const keyLevel = (status === 401 || status === 402 || status === 403) && !coarenaFreeTierSkip;
+      const modelLevel = status === 404 || status === 408 || (provider === 'coarena' && status === 503) || coarenaFreeTierSkip;
       if (keyLevel || !modelLevel) throw error;
     }
   }
@@ -761,7 +783,13 @@ async function fetchProviderModels(provider, apiKey) {
       .map((item) => item.id)
       .filter((id) => Boolean(id) && (!exclude || !exclude.test(id)));
     if (!ids.length) return meta.models;
-    return (provider === 'coarena' ? ids : [...new Set([...meta.models, ...ids])]).slice(0, 400);
+    if (provider === 'coarena') {
+      const freeSet = new Set(COARENA_TEST_FALLBACKS);
+      const freeFirst = COARENA_TEST_FALLBACKS.filter((id) => ids.includes(id));
+      const rest = ids.filter((id) => !freeSet.has(id));
+      return [...freeFirst, ...rest].slice(0, 400);
+    }
+    return [...new Set([...meta.models, ...ids])].slice(0, 400);
   } finally {
     clearTimeout(timer);
   }

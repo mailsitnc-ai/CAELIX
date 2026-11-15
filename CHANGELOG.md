@@ -1,5 +1,12 @@
 # CAELIX changelog
 
+## 0.1.22 — Coarena free-tier defaults, `402` spillover fix, and readable `504` gateway errors
+
+- **Root cause fixed (`src/engine/providers.js`, `src/engine/index.js`):** Live testing with stored Coarena keys showed `gpt-6-1-sol` and `gpt-6-astra` return `402` on free Coarena accounts (`not part of the free tier` — free accounts can use `gpt-6-luna`, `gemini-3-8-flash`, and `deepseek-v4-1-flash-1017`). Previously, `Engine.completeWithFailover()` caught `402` and spilled across providers, hitting an upstream `504 Gateway Time-out` HTML page after `33s` and hiding the real `402` explanation.
+- **Coarena free-tier ordering & smart `402` guard:** Set Coarena's `defaultModel` to `gpt-6-luna`, ordered the 3 verified free-tier models first (`Free tier` vs `Paid credits` notes in `MODEL_NOTES` and `MODEL_FAILOVER.coarena`), kept `testKey` falling back smoothly from paid models to `gpt-6-luna`, and stopped `402 not part of the free tier` from spilling to other providers in chat so users see the exact model message immediately.
+- **Readable gateway errors & recovery actions (`src/engine/providers.js`, `src/renderer/app.js`):** Stripped raw HTML tags in `readError()` (`cleanErrorDetail`) with a plain-language `504` timeout hint, and enabled `Open Keys` / `Switch Model` buttons on `402` and `502`/`503`/`504` error cards.
+- **Verified:** Verified live Coarena tool calling (`23` tools) on `gpt-6-luna`, `gemini-3-8-flash`, and `deepseek-v4-1-flash-1017`; expanded `checks/verify_features.js` to cover HTML `504` stripping and `402` no-spillover; rebuilt `dist/CAELIX.app` (`0.1.22`) and ran `doctor`, `verify_features.js`, `terminal-probe.js`, and `selfcheck`.
+
 ## 0.1.21 — Built-in Coarena provider and active frontier model catalog
 
 - **Coarena provider (`src/engine/providers.js`, `src/engine/index.js`, `src/renderer/app.js`, `src/cli.js`):** Added **Coarena** (`https://coarena.ai/api/v1/chat/completions`, key page `https://coarena.ai/account/api`, public live catalog `https://coarena.ai/api/v1/models`, CLI env `COARENA_API_KEY`) as a first-class provider in CAELIX with all active frontier models pre-configured (`gpt-6-1-sol`, `gpt-6-1-terra`, `gpt-6-astra`, `gpt-6-luna`, `gemini-4-carbon`, `gemini-4-argon`, `gemini-3-8-flash`, `deepseek-v4-1-flash-1017`, `grok-4-7`, `kimi-k3-1-pro`).

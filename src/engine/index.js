@@ -1054,6 +1054,8 @@ class Engine {
       } catch (error) {
         if (signal?.aborted) throw new Error('Cancelled.');
         const status = Number(error.status || (String(error.message).match(/returned (\d{3})/) || [])[1] || 0);
+        const isPlanRestrictedModel = status === 402 && /not part of the free tier/i.test(error.message);
+        if (isPlanRestrictedModel) throw error;
         const isRateLimit = status === 429;
         const isKeyAuthOrQuota = isRateLimit || status === 401 || status === 402 || status === 403 || status === 404;
         const isNvidiaStall = activeProviderId === 'nvidia'
@@ -1095,7 +1097,7 @@ class Engine {
               { provider: 'nvidia', model: 'nvidia/nemotron-3-ultra-550b-a55b', tier: 'sibling-model' },
             );
           } else if (isCoarenaUnavailable) {
-            for (const alt of (PROVIDERS.coarena?.models || []).slice(0, 4).reverse()) {
+            for (const alt of (PROVIDERS.coarena?.models || []).slice(0, 3).reverse()) {
               if (alt !== activeModelId) candidates.unshift({ provider: 'coarena', model: alt, tier: 'sibling-model' });
             }
           }
