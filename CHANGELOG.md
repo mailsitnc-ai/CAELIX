@@ -1,5 +1,11 @@
 # CAELIX changelog
 
+## 0.1.16 — Smart context efficiency, expanded 2M window, and automatic `/reset`
+
+- **Smart context efficiency & expanded window (`src/engine/tools.js`, `src/engine/index.js`):** Raised the local rolling chat window (`contextLimit`) to `2,000,000` (`1,000,000` on Groq), updated `contextReport()` to measure trimmed active AI memory instead of raw historical tool dumps, added default `300`-line / `16,000`-char smart slicing and long-line capping in `read_file` with tighter `list_dir`/`glob`/`grep` output caps, and added context-discipline guidance (`grep`/`glob` before `read_file`) to `systemPrompt()`.
+- **Automatic `/reset` on threshold (`src/engine/index.js`, `src/renderer/app.js`):** Added automatic `/reset` rollover (`autoResetPercent: 70`, displayed in the Context tab) right after a completed turn reaches threshold, running `resetContext()` seamlessly, preserving scroll above the reset divider, carrying forward the compact `resetHandoff` summary, and emitting `auto-reset` to update the UI live.
+- **Verified:** Extended `checks/verify_features.js` with smart-slicing + 2M trimmed-memory checks and `auto-reset` rollover verification; ran `npm run package`, `doctor`, `verify_features.js`, `terminal-probe.js`, and `selfcheck`.
+
 ## 0.1.15 — Folder-free Chat mode and AI-generated chat titles
 
 - **Strict no-folder Chat mode (`src/store.js`, `src/main.js`, `src/renderer/`):** Fixed `SessionStore.list()` dropping each session's `surface`, normalized any existing `surface: 'chat'` sessions away from Code project folders to `CAELIX Chats` on startup, hid the footer folder/branch pills in Chat mode (`#strip-folder`, `#strip-branch`), skipped `git:branch` lookups and `@` code-file mentions in Chat mode, flushed pending `liveRaf` text frames before clearing live state on `done`/`error`, and added sequence guards in `refreshSessions()`/`openSession()` against overlapping switches.

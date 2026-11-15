@@ -742,7 +742,7 @@ function renderContext() {
           <span class="context-value">${value.toLocaleString()}</span>
         </div>`).join('')}
     </div>
-    <div class="context-foot">${report.messages} active message(s) in AI memory${report.savedMessages > report.messages ? ` · ${report.savedMessages} kept in scroll` : ''}. Not an account limit.</div>
+    <div class="context-foot">${report.messages} active message(s) in AI memory${report.savedMessages > report.messages ? ` · ${report.savedMessages} kept in scroll` : ''}. Auto-resets at ${report.autoResetPercent || 70}% (/reset). Not an account limit.</div>
     <div class="context-actions-row">
       <button type="button" id="context-reset-btn" class="context-action-btn" title="Summarize what has happened so far and reset chat usage (/reset)">Reset chat context (/reset)</button>
     </div>`;
@@ -1470,6 +1470,24 @@ function onChatEvent(event) {
       renderContext();
       renderStatusStrip();
       if (event.compacted) toast(`Compacted ${event.compacted} older message(s) to fit the context window.`);
+      break;
+    case 'auto-reset':
+      if (state.session && (!event.sessionId || event.sessionId === state.session.id)) {
+        state.contextReport = event.report || state.contextReport;
+        state.lastUsageText = '';
+        api.invoke('sessions:get', state.session.id).then((fresh) => {
+          if (!fresh || state.session?.id !== fresh.id) return;
+          state.session = fresh;
+          renderAll();
+          if (event.summarizedCount > 0) {
+            appendInlineNote(
+              'Context auto-reset — ready to continue',
+              `Context reached threshold and automatically ran **/reset**, summarizing **${event.summarizedCount}** message(s) (**${event.beforeTokens.toLocaleString()} → ${event.afterTokens.toLocaleString()}** tokens) so work continues cleanly.\n\n${event.summary}`,
+            );
+          }
+          toast('Context reached threshold — auto-reset with /reset summary.');
+        }).catch(() => {});
+      }
       break;
     case 'checkpoint':
       state.checkpoints = [event.checkpoint, ...state.checkpoints.filter((item) => item.id !== event.checkpoint.id)];

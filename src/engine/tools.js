@@ -9,6 +9,10 @@ const { spawn } = require('child_process');
 const { diffLines } = require('./diff');
 
 const MAX_OUTPUT = 60_000;
+const READ_FILE_DEFAULT_LINES = 300;
+const READ_FILE_MAX_LINES = 800;
+const READ_FILE_MAX_CHARS = 16_000;
+const READ_LINE_MAX_CHARS = 1_200;
 const IMAGE_MIME = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -82,13 +86,13 @@ function toolDefinitions(root) {
   return [
     {
       name: 'read_file',
-      description: 'Read a text file from the project. Returns numbered lines. Use offset and limit for large files.',
+      description: 'Read a text file slice from the project. Returns numbered lines (default 300 lines, size-capped). Use grep first to find symbols and pass offset/limit for large files.',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string', description: 'File path, relative to the project.' },
           offset: { type: 'integer', description: 'First line, 1-based.' },
-          limit: { type: 'integer', description: 'Maximum number of lines.' },
+          limit: { type: 'integer', description: 'Maximum number of lines (default 300, max 800).' },
         },
         required: ['path'],
       },
@@ -129,7 +133,7 @@ function toolDefinitions(root) {
     },
     {
       name: 'glob',
-      description: 'Find files in the project by glob pattern, most recently modified first.',
+      description: 'Find files in the project by glob pattern, most recently modified first. Use targeted patterns to save context.',
       parameters: {
         type: 'object',
         properties: {
@@ -141,7 +145,7 @@ function toolDefinitions(root) {
     },
     {
       name: 'grep',
-      description: 'Search file contents in the project with a regular expression or literal string.',
+      description: 'Search file contents in the project to find exact files and line numbers before calling read_file.',
       parameters: {
         type: 'object',
         properties: {
@@ -457,11 +461,31 @@ class ToolRunner {
     if (buffer.includes(0)) throw new Error('That file looks binary.');
     const lines = buffer.toString('utf8').split('\n');
     const offset = Math.max(1, Number(input.offset) || 1);
-    const limit = Math.min(2000, Math.max(1, Number(input.limit) || 2000));
+    const limit = Math.min(READ_FILE_MAX_LINES, Math.max(1, Number(input.limit) || READ_FILE_DEFAULT_LINES));
     const slice = lines.slice(offset - 1, offset - 1 + limit);
+    const outLines = [];
+    let chars = 0;
+    let charCapped = false;
+    for (let index = 0; index < slice.length; index += 1) {
+      let lineText = slice[index];
+      if (lineText.length > READ_LINE_MAX_CHARS) {
+        lineText = `${lineText.slice(0, READ_LINE_MAX_CHARS)}… [line truncated: ${lineText.length} chars]`;
+      }
+      const formatted = `${String(offset + index).padStart(5)}  ${lineText}`;
+      if (outLines.length > 0 && chars + formatted.length + 1 > READ_FILE_MAX_CHARS) {
+        charCapped = true;
+        break;
+      }
+      outLines.push(formatted);
+      chars += formatted.length + 1;
+    }
+    const endLine = offset + outLines.length - 1;
+    if (charCapped || endLine < lines.length) {
+      outLines.push(`\n… [Showing lines ${offset}-${endLine} of ${lines.length}. Use grep for specific symbols or read_file(offset=${endLine + 1}) for more.]`);
+    }
     return {
-      output: slice.map((line, index) => `${String(offset + index).padStart(5)}  ${line}`).join('\n'),
-      meta: { lines: lines.length, shown: slice.length },
+      output: outLines.join('\n'),
+      meta: { lines: lines.length, shown: outLines.length },
     };
   }
 
@@ -591,7 +615,7 @@ class ToolRunner {
     const dir = this.resolvePath(input.path || '.', { mustExist: true });
     const entries = await fsp.readdir(dir, { withFileTypes: true });
     const lines = [];
-    for (const entry of entries.slice(0, 400)) {
+    for (const entry of entries.slice(0, 150)) {
       const full = path.join(dir, entry.name);
       let size = '';
       try {
@@ -602,7 +626,8 @@ class ToolRunner {
       }
       lines.push(`${entry.isDirectory() ? 'dir ' : 'file'}  ${entry.name}${size ? `  ${size}` : ''}`);
     }
-    return { output: lines.join('\n') || '(empty folder)', meta: { count: entries.length } };
+    if (entries.length > 150) lines.push(`… [${entries.length - 150} more entries]`);
+    return { output: truncate(lines.join('\n'), 12_000) || '(empty folder)', meta: { count: entries.length } };
   }
 
   async glob(input) {
@@ -618,8 +643,10 @@ class ToolRunner {
       }
     }
     matched.sort((a, b) => b.mtime - a.mtime);
-    const capped = matched.slice(0, 300);
-    return { output: capped.map((item) => item.relative).join('\n') || 'No files matched.', meta: { count: matched.length } };
+    const capped = matched.slice(0, 150);
+    const text = capped.map((item) => item.relative).join('\n')
+      + (matched.length > 150 ? `\n… [${matched.length - 150} more matches]` : '');
+    return { output: truncate(text, 12_000) || 'No files matched.', meta: { count: matched.length } };
   }
 
   async grep(input) {
@@ -635,7 +662,7 @@ class ToolRunner {
       throw new Error(`Invalid pattern: ${error.message}`);
     }
     const include = input.include ? globToRegExp(String(input.include)) : null;
-    const max = Math.min(500, Number(input.max_results) || 200);
+    const max = Math.min(250, Number(input.max_results) || 80);
     const files = await walk(start);
     const results = [];
     for (const file of files) {
@@ -665,7 +692,7 @@ class ToolRunner {
       }
       if (results.length >= max) break;
     }
-    return { output: results.join('\n') || 'No matches.', meta: { count: results.length } };
+    return { output: truncate(results.join('\n'), 16_000) || 'No matches.', meta: { count: results.length } };
   }
 
   async bash(input) {
