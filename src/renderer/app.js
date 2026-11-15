@@ -1077,10 +1077,11 @@ async function openSession(id) {
   scrollToBottom(true);
 }
 
-async function newChat() {
+async function newChat(overrideCwd = null) {
   const targetSurface = state.surface === 'chat' ? 'chat' : 'code';
+  const explicitCwd = typeof overrideCwd === 'string' && overrideCwd.trim() ? overrideCwd : null;
   const session = await api.invoke('sessions:create', {
-    cwd: targetSurface === 'chat' ? null : (state.codeProject || state.project),
+    cwd: targetSurface === 'chat' ? null : (explicitCwd || state.codeProject || state.project),
     surface: targetSurface,
     provider: state.session?.provider || (state.info.selfcheck ? 'simulator' : 'gemini'),
     model: state.session?.model || (state.info.selfcheck ? 'sim-1' : 'gemini-2.5-flash'),
@@ -1811,6 +1812,11 @@ async function sendMessage() {
   state.currentAssistant = null;
   state.session.messages = state.session.messages || [];
   state.session.messages.push({ role: 'user', content: finalPrompt, attachments });
+  const activeEntry = (state.sessions || []).find((item) => item.id === state.session.id);
+  if (activeEntry) {
+    activeEntry.messageCount = (activeEntry.messageCount || 0) + 1;
+    activeEntry.updatedAt = Date.now();
+  }
   const current = $('#transcript');
   if ($('.empty-state', current)) current.innerHTML = '';
   const node = buildUserMessageNode(finalPrompt, attachments);
@@ -2909,21 +2915,75 @@ async function runTerminal() {
   }
 }
 
+function pickInitialSession(sessions, activeId, surface, codeProject) {
+  const forSurface = (sessions || []).filter((s) => sessionSurface(s) === surface);
+  if (!forSurface.length) return null;
+  const activeMatch = activeId ? forSurface.find((s) => s.id === activeId) : null;
+  if (activeMatch && (activeMatch.messageCount || 0) > 0) return activeMatch;
+  const nonEmpty = forSurface.filter((s) => (s.messageCount || 0) > 0);
+  if (surface === 'code' && codeProject) {
+    const folderMatch = nonEmpty.find((s) => s.cwd === codeProject);
+    if (folderMatch) return folderMatch;
+  }
+  if (nonEmpty.length) return nonEmpty[0];
+  if (activeMatch) return activeMatch;
+  if (surface === 'code' && codeProject) {
+    const emptyFolderMatch = forSurface.find((s) => s.cwd === codeProject);
+    if (emptyFolderMatch) return emptyFolderMatch;
+  }
+  return forSurface[0];
+}
+
 async function selectProjectFolder(folder) {
   if (!folder) return;
+  if (state.streaming) {
+    toast('Wait for the current reply to finish or stop it before switching folders.');
+    return;
+  }
   if (state.surface === 'chat') {
     await applySurface('code', true);
   }
+  await api.invoke('project:set', folder).catch(() => {});
   state.project = folder;
   if (folder !== state.info?.chatRoot) state.codeProject = folder;
   state.projectFiles = null;
-  if (state.session) {
-    await api.invoke('sessions:update', { id: state.session.id, cwd: folder });
-    state.session.cwd = folder;
+
+  const existingForFolder = (state.sessions || []).find((s) => sessionSurface(s) === 'code' && s.cwd === folder && (s.messageCount || 0) > 0);
+  const currentHasMessages = (state.session?.messages || []).length > 0;
+  if (existingForFolder && (!currentHasMessages || state.session?.cwd !== folder)) {
+    if (state.session?.id !== existingForFolder.id) {
+      await openSession(existingForFolder.id);
+    } else {
+      refreshGitBranch();
+      refreshMemory().catch(() => {});
+      renderChips();
+    }
+    $('#prompt')?.focus();
+    toast(`Workspace folder: ${folderBaseName(folder)}`);
+    return;
   }
+  if (state.session && currentHasMessages && state.session.cwd !== folder) {
+    await newChat(folder);
+    toast(`Workspace folder: ${folderBaseName(folder)}`);
+    return;
+  }
+  if (state.session) {
+    await api.invoke('sessions:update', { id: state.session.id, surface: 'code', cwd: folder });
+    await api.invoke('sessions:set-active', state.session.id).catch(() => {});
+    state.session.surface = 'code';
+    state.session.cwd = folder;
+    const entry = (state.sessions || []).find((item) => item.id === state.session.id);
+    if (entry) {
+      entry.surface = 'code';
+      entry.cwd = folder;
+      entry.updatedAt = Date.now();
+    }
+  }
+  await loadTerminalTabs().catch(() => {});
   refreshGitBranch();
   refreshMemory().catch(() => {});
   renderChips();
+  renderSessions();
   if (state.session && !(state.session.messages || []).length) {
     renderEmpty();
   }
@@ -2967,14 +3027,16 @@ async function init() {
   state.codeProject = (info.project && info.project !== info.chatRoot) ? info.project : '';
   state.project = state.surface === 'chat' ? (info.chatRoot || info.project) : (state.codeProject || info.project);
 
-  const matchingSession = (state.activeId && state.sessions.find((s) => s.id === state.activeId && sessionSurface(s) === state.surface))
-    || state.sessions.find((s) => sessionSurface(s) === state.surface);
+  const matchingSession = pickInitialSession(state.sessions, state.activeId, state.surface, state.codeProject);
 
   if (matchingSession) {
     const session = await api.invoke('sessions:get', matchingSession.id);
     if (session) {
       state.session = session;
       state.activeId = session.id;
+      if (matchingSession.id !== sessions.activeId) {
+        await api.invoke('sessions:set-active', session.id).catch(() => {});
+      }
       if (sessionSurface(session) === 'code' && session.cwd && session.cwd !== info.chatRoot) {
         state.project = session.cwd;
         state.codeProject = session.cwd;

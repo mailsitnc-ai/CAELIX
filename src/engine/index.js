@@ -551,6 +551,7 @@ class Engine {
     runner.sessionAllowed = this.allowances.get(sessionId) || new Set();
 
     emit({ type: 'turn-start', at: started });
+    let userPersisted = false;
 
     try {
       const provider = PROVIDERS[session.provider];
@@ -564,6 +565,26 @@ class Engine {
           userMsg.content = `${userMsg.content}\n\n[Hook context]\n${noteText}`;
           emit({ type: 'hook-event', event: 'UserPromptSubmit', output: noteText });
         }
+      }
+
+      if (typeof this.sessions.appendMessage === 'function') {
+        this.sessions.appendMessage(sessionId, userMsg);
+        userPersisted = true;
+        this.emit({
+          type: 'session-updated',
+          session: {
+            id: session.id,
+            title: session.title,
+            cwd: session.cwd,
+            surface: session.surface || null,
+            provider: session.provider,
+            model: session.model,
+            mode: session.mode,
+            messageCount: Array.isArray(session.messages) ? session.messages.filter((m) => !m.hidden).length : 1,
+            updatedAt: session.updatedAt,
+            createdAt: session.createdAt,
+          },
+        });
       }
 
       const mcpTools = this.mcp ? await this.mcp.toolDefinitions(session.cwd).catch(() => []) : [];
@@ -585,7 +606,7 @@ class Engine {
         } else {
           result = await this.callKeyed({
             session,
-            messages,
+            messages: userPersisted ? messages.slice(1) : messages,
             extraTools: mcpTools,
             target: turnTarget,
             emit,
@@ -723,7 +744,7 @@ class Engine {
         try {
           const synth = await this.callKeyed({
             session,
-            messages: [...messages, {
+            messages: [...(userPersisted ? messages.slice(1) : messages), {
               role: 'user',
               content: 'Stop calling tools now and provide a clear, concise final summary of everything you found and accomplished so far.',
             }],
@@ -762,7 +783,8 @@ class Engine {
       }
 
       this.allowances.set(sessionId, runner.sessionAllowed || new Set());
-      const saved = this.sessions.saveTurn(sessionId, messages, {
+      const turnToSave = userPersisted ? messages.slice(1) : messages;
+      const saved = this.sessions.saveTurn(sessionId, turnToSave, {
         changes,
         terminal,
         todos,
@@ -837,7 +859,7 @@ class Engine {
           if (lastAssistant) lastAssistant.turnSummary = summary;
           else messages.push({ role: 'assistant', content: '', toolCalls: [], turnSummary: summary, id: `msg_${Date.now()}_summary`, createdAt: Date.now() });
         }
-        this.sessions.saveTurn(sessionId, messages, { changes, terminal, todos });
+        this.sessions.saveTurn(sessionId, userPersisted ? messages.slice(1) : messages, { changes, terminal, todos });
       }
       emit({ type: 'error', message: error.message, elapsedMs: Date.now() - started, summary });
       emit({ type: 'done', error: error.message, elapsedMs: Date.now() - started, changes, summary });
@@ -1838,6 +1860,10 @@ class Engine {
   }
 
   dispose() {
+    for (const controller of this.controllers.values()) {
+      try { controller.abort(); } catch { /* best effort */ }
+    }
+    this.controllers.clear();
     this.terminals.dispose();
     this.mcp?.dispose();
   }

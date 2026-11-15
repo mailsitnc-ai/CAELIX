@@ -171,8 +171,17 @@ class SessionStore {
       sessions: this.data.sessions
         .slice()
         .sort((a, b) => b.updatedAt - a.updatedAt)
-        .map(({ id, title, cwd, surface, provider, model, mode, updatedAt, createdAt }) => ({
-          id, title, cwd, surface: surface || null, provider, model, mode, updatedAt, createdAt,
+        .map(({ id, title, cwd, surface, provider, model, mode, messages, updatedAt, createdAt }) => ({
+          id,
+          title,
+          cwd,
+          surface: surface || null,
+          provider,
+          model,
+          mode,
+          messageCount: Array.isArray(messages) ? messages.filter((m) => !m.hidden).length : 0,
+          updatedAt,
+          createdAt,
         })),
     };
   }
@@ -261,6 +270,7 @@ class SessionStore {
     if (!session) return null;
     session.messages.push(message);
     session.updatedAt = Date.now();
+    this.data.activeId = id;
     this.persist();
     return message;
   }
@@ -268,11 +278,12 @@ class SessionStore {
   saveTurn(id, messages, extra = {}) {
     const session = this.get(id);
     if (!session) return null;
-    session.messages.push(...messages);
+    if (Array.isArray(messages) && messages.length) session.messages.push(...messages);
     if (extra.changes) session.changes.push(...extra.changes);
     if (extra.terminal) session.terminal.push(...extra.terminal);
     if (extra.todos) session.todos = extra.todos;
     session.updatedAt = Date.now();
+    this.data.activeId = id;
     this.persist();
     return session;
   }

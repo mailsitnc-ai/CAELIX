@@ -792,6 +792,59 @@ async function run(context) {
       return 'panel collapsed and restored';
     });
 
+    await step('restore code folder chat after closing and reopening instead of showing open folder', async () => {
+      const subFolder = path.join(workspace, 'folder-restore-sub');
+      fs.mkdirSync(subFolder, { recursive: true });
+      const createdId = await evaluate(`(async () => {
+        const s = await window.caelix.invoke('sessions:create', {
+          cwd: ${quote(subFolder)},
+          surface: 'code',
+          provider: 'simulator',
+          model: 'sim-1',
+          mode: 'accept',
+        });
+        await window.caelix.invoke('project:set', ${quote(subFolder)});
+        return s.id;
+      })()`);
+      await evaluate(`document.querySelector('[data-session="' + ${quote(createdId)} + '"]')?.click()`);
+      await waitFor(`window.__caelixState.session?.id === ${quote(createdId)} && window.__caelixState.session?.cwd === ${quote(subFolder)}`, 4000, 'opened subFolder chat');
+      await setValue('#prompt', 'Remember this folder chat after reopen.');
+      await click('#send-btn');
+      await waitFor('window.__caelixState.streaming === false && document.querySelectorAll(".msg").length >= 2', 15000, 'folder chat reply finished');
+
+      // Leave an empty New chat stub active in Code mode, then reload the window.
+      await click('#new-chat');
+      await waitFor('!!document.querySelector(".folder-picker-card")', 4000, 'empty stub shows folder picker');
+      const emptyStubId = await evaluate('window.__caelixState.session?.id');
+
+      win.webContents.reload();
+      await waitFor('window.__caelixReady === true', 15000, 'renderer after reload');
+      await waitFor(`window.__caelixState.session?.id === ${quote(createdId)} && document.querySelectorAll(".msg").length >= 2`, 8000, 'saved folder chat restored instead of open folder');
+      if (await evaluate('!!document.querySelector(".folder-picker-card")')) {
+        throw new Error('Reopening CAELIX showed the empty folder picker instead of the saved folder chat.');
+      }
+
+      // Now open the empty stub and click the folder in the picker — should also reopen the saved folder chat.
+      await evaluate(`document.querySelector('[data-session="' + ${quote(emptyStubId)} + '"]')?.click()`);
+      await waitFor(`window.__caelixState.session?.id === ${quote(emptyStubId)} && !!document.querySelector(".folder-picker-card")`, 4000, 'empty stub selected');
+      await click(`.folder-pick-item[data-pick-folder="${subFolder}"]`);
+      await waitFor(`window.__caelixState.session?.id === ${quote(createdId)} && document.querySelectorAll(".msg").length >= 2`, 5000, 'selecting folder reopened its saved chat');
+
+      // Clean up temporary sessions and restore workspace as active project before final reload check.
+      await evaluate(`(async () => {
+        await window.caelix.invoke('sessions:delete', ${quote(emptyStubId)});
+        await window.caelix.invoke('sessions:delete', ${quote(createdId)});
+        await window.caelix.invoke('project:set', ${quote(workspace)});
+        const list = await window.caelix.invoke('sessions:list');
+        const target = list.sessions.find((s) => s.title === 'CAELIX self-check chat') || list.sessions[0];
+        if (target) await window.caelix.invoke('sessions:set-active', target.id);
+      })()`);
+      fs.rmSync(subFolder, { recursive: true, force: true });
+      await evaluate('([...document.querySelectorAll(".session-item")].find(el => el.textContent.includes("CAELIX self-check chat")) || document.querySelector(".session-item"))?.click()');
+      await waitFor('document.querySelector("#chat-title").textContent === "CAELIX self-check chat"', 5000, 'restored self-check chat before final reload');
+      return 'folder chat saved, survived empty stub & window reload, and reopened on folder select';
+    });
+
     await step('restart the window and find the chat again', async () => {
       await sleep(400);
       win.webContents.reload();

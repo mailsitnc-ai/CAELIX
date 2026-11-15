@@ -1,5 +1,11 @@
 # CAELIX changelog
 
+## 0.1.19 — Save and restore Code folder chats across close and reopen
+
+- **Immediate turn persistence (`src/engine/index.js`, `src/store.js`, `src/main.js`):** Each user message is now written to `sessions.json` immediately when sent (`appendMessage` updating `activeId`) instead of waiting until the end of the multi-round AI turn, while `SessionStore.list()` and `sessionSummary()` expose visible `messageCount` so saved chats are distinguished from empty `New chat` stubs.
+- **Folder-aware restore & folder switching (`src/renderer/app.js`):** Added `pickInitialSession()` in `init()` so reopening CAELIX prefers real saved chats (and matches the active Code folder) instead of getting stuck on an empty `New chat` showing `Choose folder… / Open`. Updated `selectProjectFolder()` to persist `lastCwd`, reopen an existing saved chat for the chosen folder if present, or start a clean new chat in that folder instead of overwriting an earlier folder's chat history.
+- **Verified:** Added immediate persistence + `messageCount` checks in `checks/verify_features.js` and an end-to-end Code folder reload & re-select restore test in `src/selfcheck.js`, rebuilt `dist/CAELIX.app`, and ran `doctor`, `verify_features.js`, `terminal-probe.js`, and `selfcheck`.
+
 ## 0.1.18 — Preserve model search input and cursor position while typing
 
 - **Root cause fixed (`src/renderer/app.js`):** Every keystroke in `#model-search` previously called `renderModelMenu(search.value)` which overwrote all of `#model-menu` (`menu.innerHTML = ...`) and re-called `search.focus()`, destroying the `<input>` element after each character and resetting `selectionStart` / `selectionEnd` back to `0` (causing words like `"free"` to come out backwards as `"eerf"` and blocking cursor edits between letters).

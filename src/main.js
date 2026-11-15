@@ -326,6 +326,7 @@ function sessionSummary(session) {
     provider: session.provider,
     model: session.model,
     mode: session.mode,
+    messageCount: Array.isArray(session.messages) ? session.messages.filter((m) => !m.hidden).length : 0,
     updatedAt: session.updatedAt,
     createdAt: session.createdAt,
   };
@@ -542,6 +543,7 @@ function registerIpc() {
   });
 
   ipcMain.handle('sessions:update', (_event, { id, ...patch }) => {
+    const existing = sessions.get(id);
     const allowed = {};
     for (const key of ['provider', 'model', 'mode', 'cwd', 'title']) {
       if (patch[key] !== undefined) allowed[key] = patch[key];
@@ -549,6 +551,8 @@ function registerIpc() {
     if (patch.surface === 'chat' || patch.surface === 'code') {
       allowed.surface = patch.surface;
       if (patch.surface === 'chat') allowed.cwd = chatRoot();
+    } else if (existing?.surface === 'chat') {
+      delete allowed.cwd;
     }
     const session = sessions.update(id, allowed);
     if (session) emit({ type: 'session-updated', session: sessionSummary(session) });
