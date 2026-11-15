@@ -1,5 +1,13 @@
 # CAELIX changelog
 
+## 0.1.11 — favourite models and readable Gemini errors
+
+- **Favourite models:** every row in the model picker now has a star. Starred models are pinned in a `Favourites` section at the top of the picker (each entry keeps its provider colour and note), the star state persists in encrypted user settings across restarts, and starring never switches the model. Covered by a new self-check step that stars, reopens the picker and proves it stayed.
+- **Readable Gemini errors:** the raw escaped JSON that showed as `Provider returned 403: [{\"error\"…}]` is fixed — provider error payloads that arrive as JSON-encoded strings (Gemini's OpenAI-compatible endpoint does this) are unwrapped, and the readable message is shown. A `403` billing refusal now renders as a clear explanation with the direct next step (`console.cloud.google.com/billing`), and an invalid Gemini key gets its own hint.
+- The self-check's isolated profile now also deletes `settings.json`, so every run starts with clean settings.
+- Verified: error-parsing unit checks (string-wrapped, plain array, invalid-key, NVIDIA 404) all pass; `ALL 19 FEATURE VERIFICATIONS PASSED` (billing-error check updated to assert the new guarantee); 25-step self-check passes from source (0 errors) and from the packaged `CAELIX.app` (0 errors, window 450 ms).
+
+
 ## 0.1.10 — NVIDIA live-model diagnosis and stall failover
 
 - **Diagnosed the real NVIDIA problem with a live probe of every curated model** (twice each, using the stored key through CAELIX's own KeyStore — the key was never printed): 6 models serve requests (`nvidia/nemotron-3.5-lightning-30b-a3b`, `nvidia/nemotron-3.5-super-vl-120b-a12b`, `nvidia/nemotron-3-ultra-550b-a55b`, `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`, `mistralai/mistral-large-4-1t-a52b`, `minimaxai/minimax-m3.1-flash`); 8 curated IDs return `404 Not found for account`; `deepseek-ai/deepseek-v4.1-flash` and `z-ai/glm-5.3-flash` hang indefinitely even with a 60 s window. The key itself was valid the whole time (`/v1/models` returns 62 entries).

@@ -28,7 +28,7 @@ if (SELF_CHECK) {
   const isolated = path.join(app.getPath('appData'), 'CAELIX Selfcheck');
   app.setPath('userData', isolated);
   fs.mkdirSync(isolated, { recursive: true });
-  for (const file of ['sessions.json', 'keys.enc', 'mcp.json', 'hooks.json']) {
+  for (const file of ['sessions.json', 'keys.enc', 'mcp.json', 'hooks.json', 'settings.json']) {
     try { fs.rmSync(path.join(isolated, file), { force: true }); } catch { /* fresh run */ }
   }
   for (const dir of ['checkpoints', 'agents']) {
@@ -362,16 +362,24 @@ function registerIpc() {
     theme: settings.get('theme', 'dark'),
     viewMode: settings.get('viewMode', 'normal'),
     surface: settings.get('surface', 'code'),
+    favouriteModels: settings.get('favouriteModels', []),
   }));
 
   ipcMain.handle('settings:set', (_event, patch = {}) => {
     if (patch.theme === 'dark' || patch.theme === 'light') settings.set('theme', patch.theme);
     if (patch.viewMode === 'normal' || patch.viewMode === 'verbose') settings.set('viewMode', patch.viewMode);
     if (patch.surface === 'chat' || patch.surface === 'code') settings.set('surface', patch.surface);
+    if (Array.isArray(patch.favouriteModels)) {
+      const clean = [...new Set(patch.favouriteModels
+        .filter((item) => typeof item === 'string' && item.trim().length > 0 && item.length < 300)
+        .map((item) => item.trim()))].slice(0, 24);
+      settings.set('favouriteModels', clean);
+    }
     return {
       theme: settings.get('theme', 'dark'),
       viewMode: settings.get('viewMode', 'normal'),
       surface: settings.get('surface', 'code'),
+      favouriteModels: settings.get('favouriteModels', []),
     };
   });
 

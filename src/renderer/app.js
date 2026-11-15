@@ -18,6 +18,7 @@ const state = {
   info: null,
   providers: [],
   keys: [],
+  favourites: [],
   sessions: [],
   activeId: null,
   session: null,
@@ -1958,6 +1959,34 @@ function syncProviderCatalogs(onlyPid = null) {
   }));
 }
 
+function favouriteKey(provider, model) {
+  return `${provider}:${model}`;
+}
+
+async function toggleFavourite(provider, model) {
+  const key = favouriteKey(provider, model);
+  const next = state.favourites.includes(key)
+    ? state.favourites.filter((item) => item !== key)
+    : [...state.favourites, key];
+  state.favourites = next;
+  await api.invoke('settings:set', { favouriteModels: next }).catch(() => {});
+  renderModelMenu($('#model-search')?.value || '');
+}
+
+function favouriteEntries(filter = '') {
+  const query = filter.trim().toLowerCase();
+  const entries = [];
+  for (const item of state.favourites) {
+    const [providerId, ...rest] = item.split(':');
+    const model = rest.join(':');
+    const provider = state.providers.find((p) => p.id === providerId);
+    if (!provider || !model) continue;
+    if (query && !model.toLowerCase().includes(query) && !provider.name.toLowerCase().includes(query)) continue;
+    entries.push({ provider, model });
+  }
+  return entries;
+}
+
 function renderModelMenu(filter = '') {
   const menu = $('#model-menu');
   if (!state.modelsAutoSynced && !state.info?.selfcheck) {
@@ -1967,16 +1996,27 @@ function renderModelMenu(filter = '') {
     }).catch(() => {});
   }
   const query = filter.trim().toLowerCase();
+  const favourites = favouriteEntries(filter);
   const chunks = [`<div class="pop-head-row"><input class="pop-search" id="model-search" placeholder="Search models" value="${escapeHtml(filter)}"><button id="model-refresh" class="pop-refresh" type="button" title="Refresh live model catalog">Refresh</button></div>`];
+  if (favourites.length) {
+    chunks.push(`<div class="pop-section">Favourites (${favourites.length})</div>`);
+    for (const { provider, model } of favourites) {
+      const active = state.session && state.session.provider === provider.id && state.session.model === model;
+      const note = provider.modelNotes?.[model];
+      const sub = active ? `Current model${note ? ` · ${note}` : ''}` : (note || provider.name);
+      chunks.push(`<button class="pop-item${active ? ' active' : ''}" data-provider="${provider.id}" data-model="${escapeHtml(model)}"><span class="pop-dot" style="background:${provider.color}"></span><span><span class="pop-title">${escapeHtml(model)}</span><span class="pop-sub">${escapeHtml(sub)}</span></span><span class="pop-star filled" title="Remove from favourites">★</span></button>`);
+    }
+  }
   for (const provider of state.providers) {
     const models = provider.models.filter((model) => !query || model.toLowerCase().includes(query) || provider.name.toLowerCase().includes(query));
     if (!models.length) continue;
     chunks.push(`<div class="pop-section">${escapeHtml(provider.name)} (${models.length})</div>`);
     for (const model of models) {
       const active = state.session && state.session.provider === provider.id && state.session.model === model;
+      const fav = state.favourites.includes(favouriteKey(provider.id, model));
       const note = provider.modelNotes?.[model];
       const sub = active ? `Current model${note ? ` · ${note}` : ''}` : (note || provider.name);
-      chunks.push(`<button class="pop-item${active ? ' active' : ''}" data-provider="${provider.id}" data-model="${escapeHtml(model)}"><span class="pop-dot" style="background:${provider.color}"></span><span><span class="pop-title">${escapeHtml(model)}</span><span class="pop-sub">${escapeHtml(sub)}</span></span></button>`);
+      chunks.push(`<button class="pop-item${active ? ' active' : ''}" data-provider="${provider.id}" data-model="${escapeHtml(model)}"><span class="pop-dot" style="background:${provider.color}"></span><span><span class="pop-title">${escapeHtml(model)}</span><span class="pop-sub">${escapeHtml(sub)}</span></span><span class="pop-star${fav ? ' filled' : ''}" title="${fav ? 'Remove from favourites' : 'Add to favourites'}">★</span></button>`);
     }
   }
   chunks.push('<div class="pop-custom"><input id="custom-model" placeholder="Use any model ID"><button id="custom-model-use">Use</button></div>');
@@ -2002,6 +2042,10 @@ function renderModelMenu(filter = '') {
     }
   });
   for (const item of $$('.pop-item', menu)) {
+    item.querySelector('.pop-star')?.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      await toggleFavourite(item.dataset.provider, item.dataset.model);
+    });
     item.addEventListener('click', async () => {
       await chooseModel(item.dataset.provider, item.dataset.model);
       menu.classList.add('hidden');
@@ -2610,11 +2654,12 @@ async function init() {
     api.invoke('providers:list'),
     api.invoke('keys:status'),
     api.invoke('sessions:list'),
-    api.invoke('settings:get').catch(() => ({ theme: 'dark', viewMode: 'normal', surface: 'code' })),
+    api.invoke('settings:get').catch(() => ({ theme: 'dark', viewMode: 'normal', surface: 'code', favouriteModels: [] })),
   ]);
   applyTheme(savedSettings?.theme);
   applyViewMode(savedSettings?.viewMode);
   applySurface(savedSettings?.surface);
+  state.favourites = Array.isArray(savedSettings?.favouriteModels) ? savedSettings.favouriteModels : [];
   state.info = info;
   state.providers = providers;
   state.keys = keys;

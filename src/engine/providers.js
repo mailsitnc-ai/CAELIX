@@ -261,7 +261,39 @@ function parseRetryAfterMs(response) {
   return null;
 }
 
-async function readError(response) {
+// Some providers (notably Gemini's OpenAI-compatible endpoint) return the
+// error payload as a JSON-encoded string, sometimes nested twice. Unwrap it so
+// the readable message is shown instead of escaped JSON like [{\"error\": …}].
+function unwrapJson(value, depth = 0) {
+  let current = value;
+  while (typeof current === 'string' && depth < 3) {
+    try {
+      const next = JSON.parse(current);
+      if (next === null || typeof next !== 'object') break;
+      current = next;
+      depth += 1;
+    } catch {
+      break;
+    }
+  }
+  return current;
+}
+
+// Turn the most common hard-to-read provider rejections into plain next steps.
+function friendlyDetail(provider, status, detail) {
+  const text = String(detail || '');
+  if (provider === 'gemini' && status === 403) {
+    if (/billing/i.test(text)) {
+      return 'Billing is not enabled on the Google project behind this key, so every Gemini model is refused. Free-tier Gemini calls need billing enabled once: open https://console.cloud.google.com/billing, enable it for the project that issued the key, then click Test in Keys. Or switch model or provider.';
+    }
+    if (/api key not valid|api_key_invalid/i.test(text)) {
+      return 'Google rejected the Gemini API key. Check the key at https://aistudio.google.com/apikey or save a new one in Keys.';
+    }
+  }
+  return text;
+}
+
+async function readError(response, provider = null) {
   let body = '';
   try {
     body = await response.text();
@@ -270,15 +302,19 @@ async function readError(response) {
   }
   let detail = body.slice(0, 500);
   try {
-    const parsed = JSON.parse(body);
+    let parsed = JSON.parse(body);
+    if (typeof parsed === 'string') parsed = unwrapJson(parsed, 1);
     const first = Array.isArray(parsed) ? parsed[0] : parsed;
-    detail = first?.error?.message || first?.message || first?.detail || parsed?.detail || detail;
+    detail = first?.error?.message || first?.message || first?.detail
+      || (parsed && typeof parsed === 'object' ? parsed?.detail : '')
+      || detail;
   } catch {
     // keep raw body
   }
   if (response.status === 404 && /not found for account/i.test(detail)) {
     detail = `${detail} — Model unavailable or account lacks NIM Public API Endpoints. Initialize your cloud profile at cloudaccounts.nvidia.com, switch models (e.g. nvidia/nemotron-3.5-lightning-30b-a3b), or email help@build.nvidia.com.`;
   }
+  detail = friendlyDetail(provider, response.status, detail);
   const err = new Error(`Provider returned ${response.status}${detail ? `: ${detail}` : ''}`);
   err.status = response.status;
   err.retryAfterMs = parseRetryAfterMs(response);
@@ -355,7 +391,7 @@ async function streamOpenAICompatible(options) {
       if (signal?.aborted) throw new Error('Cancelled.');
       throw error;
     }
-    if (!response.ok) throw await readError(response);
+    if (!response.ok) throw await readError(response, provider);
     if (!response.body) throw new Error('The provider returned no response stream.');
 
     resetStall();
@@ -497,7 +533,7 @@ async function probeModel(meta, provider, apiKey, targetModel) {
       }),
       signal: controller.signal,
     });
-    if (!response.ok) throw await readError(response);
+    if (!response.ok) throw await readError(response, provider);
     return { ok: true, model: targetModel };
   } catch (error) {
     if (error.name === 'AbortError') {
@@ -565,7 +601,7 @@ async function fetchProviderModels(provider, apiKey) {
         headers: { 'x-goog-api-key': apiKey },
         signal: controller.signal,
       });
-      if (!response.ok) throw await readError(response);
+      if (!response.ok) throw await readError(response, 'gemini');
       const data = await response.json();
       const ids = (data.models || [])
         .filter((item) => Array.isArray(item.supportedGenerationMethods) && item.supportedGenerationMethods.includes('generateContent'))
@@ -579,7 +615,7 @@ async function fetchProviderModels(provider, apiKey) {
       headers,
       signal: controller.signal,
     });
-    if (!response.ok) throw await readError(response);
+    if (!response.ok) throw await readError(response, provider);
     const data = await response.json();
     const exclude = MODEL_EXCLUDES[provider];
     const ids = (data.data || [])
@@ -593,5 +629,5 @@ async function fetchProviderModels(provider, apiKey) {
 
 module.exports = {
   PROVIDERS, MODEL_NOTES, MODEL_FAILOVER, PROVIDER_SPILLOVER, PROVIDER_HIGH_HEADROOM,
-  providerList, streamOpenAICompatible, testKey, fetchProviderModels,
+  providerList, streamOpenAICompatible, testKey, fetchProviderModels, readError,
 };

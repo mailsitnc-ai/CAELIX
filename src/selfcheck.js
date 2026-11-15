@@ -244,6 +244,21 @@ async function run(context) {
       return 'sim-1';
     });
 
+    await step('favourite a model and pin it in the picker', async () => {
+      await click('#model-chip');
+      await waitFor('!document.querySelector("#model-menu").classList.contains("hidden")', 4000, 'model menu');
+      await click('[data-provider="simulator"][data-model="sim-1"] .pop-star');
+      await waitFor('document.querySelector(".pop-section")?.textContent.startsWith("Favourites (1)")', 4000, 'favourites section');
+      const saved = await evaluate('JSON.stringify(window.__caelixState.favourites)');
+      if (saved !== JSON.stringify(['simulator:sim-1'])) throw new Error(`Favourites not saved: ${saved}`);
+      await click('#model-chip');
+      await click('#model-chip');
+      await waitFor('document.querySelector(".pop-section")?.textContent.startsWith("Favourites (1)")', 4000, 'favourites persisted');
+      await click('[data-provider="simulator"][data-model="sim-1"]');
+      await waitFor('document.querySelector("#model-chip").textContent === "sim-1"', 5000, 'model still chosen');
+      return 'sim-1 starred, pinned and kept';
+    });
+
     await step('create a chat in the test folder', async () => {
       await click('#new-chat');
       await waitFor('document.querySelector("#chat-title").textContent === "New chat"', 5000, 'new chat');
