@@ -1737,34 +1737,46 @@ class Engine {
       if (session.title !== expected && session.title !== 'New chat') return null;
 
       let title = '';
-      if (session.provider !== 'simulator' && session.provider !== 'claude' && PROVIDERS[session.provider]?.baseUrl) {
-        const pool = this.getKeyPool(session.provider);
-        if (pool.length) {
-          const picked = this.pickKey(session.provider, session.model);
-          const snippetUser = String(userText || '').trim().slice(0, 600);
-          const snippetAssistant = String(assistantText || '').trim().slice(0, 600);
+      if (session.provider !== 'simulator' && session.provider !== 'claude') {
+        const snippetUser = String(userText || '').trim().slice(0, 600);
+        const snippetAssistant = String(assistantText || '').trim().slice(0, 600);
+        const titleMessages = [
+          {
+            role: 'system',
+            content: 'Name the topic of this conversation in 2 to 5 concise words (like ChatGPT/Claude chat titles). Do not copy the full question verbatim. Output ONLY the plain title text with no quotes, markdown, or trailing punctuation.',
+          },
+          {
+            role: 'user',
+            content: `User: ${snippetUser}${snippetAssistant ? `\n\nAssistant: ${snippetAssistant}` : ''}`,
+          },
+        ];
+        const candidates = [{ provider: session.provider, model: session.model }];
+        for (const fallbackProvider of ['groq', 'gemini', 'openrouter', 'nvidia']) {
+          if (fallbackProvider === session.provider) continue;
+          const fallbackModel = PROVIDERS[fallbackProvider]?.defaultModel;
+          if (fallbackModel && this.getKeyPool(fallbackProvider).length) {
+            candidates.push({ provider: fallbackProvider, model: fallbackModel });
+          }
+        }
+        for (const target of candidates) {
+          if (!PROVIDERS[target.provider]?.baseUrl) continue;
+          const pool = this.getKeyPool(target.provider);
+          if (!pool.length) continue;
+          const picked = this.pickKey(target.provider, target.model);
           let generated = '';
           try {
             const result = await streamOpenAICompatible({
-              provider: session.provider,
-              model: session.model,
+              provider: target.provider,
+              model: target.model,
               apiKey: picked.key,
-              maxTokens: 48,
-              timeoutMs: 12_000,
+              maxTokens: null,
+              timeoutMs: 25_000,
               tools: [],
-              messages: [
-                {
-                  role: 'system',
-                  content: 'Write a concise 2 to 6 word title for this conversation. Return only the plain title text with no quotes, markdown, or trailing punctuation.',
-                },
-                {
-                  role: 'user',
-                  content: `User: ${snippetUser}${snippetAssistant ? `\n\nAssistant: ${snippetAssistant}` : ''}`,
-                },
-              ],
+              messages: titleMessages,
               onDelta: (delta) => { generated += delta; },
             });
             title = cleanChatTitle(result?.text || generated);
+            if (title) break;
           } catch {
             title = '';
           }

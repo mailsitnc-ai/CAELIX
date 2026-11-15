@@ -575,13 +575,7 @@ function registerIpc() {
   ipcMain.handle('chat:send', async (_event, { sessionId, text, attachments } = {}) => {
     const session = sessions.get(sessionId);
     if (!session) throw new Error('No such chat.');
-    let provisionalTitle = null;
-    if (session.title === 'New chat' && String(text).trim()) {
-      provisionalTitle = String(text).trim().replace(/\s+/g, ' ').slice(0, 52);
-      sessions.rename(sessionId, provisionalTitle);
-      emit({ type: 'session-updated', session: sessionSummary(sessions.get(sessionId)) });
-    }
-    const dispatch = () => engine.send(sessionId, text, attachments, { provisionalTitle }).catch((error) => {
+    const dispatch = () => engine.send(sessionId, text, attachments).catch((error) => {
       emit({ type: 'error', message: error.message });
     });
     // The OmniRoute helper is launched on first use so no terminal is needed.

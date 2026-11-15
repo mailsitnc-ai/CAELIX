@@ -69,6 +69,7 @@ class BrowserPanel {
     this.bounds = null;
     this.history = [];
     this.cursor = -1;
+    this.pendingUrl = '';
     this.view = new WebContentsView({
       webPreferences: {
         contextIsolation: true,
@@ -101,7 +102,7 @@ class BrowserPanel {
     const wc = this.view.webContents;
     return {
       visible: this.visible,
-      url: wc.getURL(),
+      url: wc.getURL() || this.pendingUrl || '',
       title: wc.getTitle(),
       canBack: wc.navigationHistory.canGoBack(),
       canForward: wc.navigationHistory.canGoForward(),
@@ -120,7 +121,17 @@ class BrowserPanel {
 
   setBounds(rect) {
     if (!rect || !Number.isFinite(rect.x)) return;
-    this.bounds = rect;
+    const next = {
+      x: Math.round(rect.x),
+      y: Math.round(rect.y),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    };
+    const prev = this.bounds;
+    if (prev && prev.x === next.x && prev.y === next.y && prev.width === next.width && prev.height === next.height) {
+      return;
+    }
+    this.bounds = next;
     if (this.visible) this.applyBounds();
   }
 
@@ -129,28 +140,34 @@ class BrowserPanel {
   }
 
   show() {
+    let changed = false;
     if (!this.visible) {
       this.win.contentView.addChildView(this.view);
       this.visible = true;
       this.applyBounds();
+      changed = true;
     }
-    this.notify({});
+    if (changed) this.notify({});
     return this.state();
   }
 
   hide() {
-    if (this.visible) {
-      this.win.contentView.removeChildView(this.view);
-      this.visible = false;
-    }
+    if (!this.visible) return this.state();
+    this.win.contentView.removeChildView(this.view);
+    this.visible = false;
     this.notify({});
     return this.state();
   }
 
   async navigate(rawUrl) {
     const url = assertHttpUrl(rawUrl);
+    this.pendingUrl = url;
     this.show();
-    await this.view.webContents.loadURL(url);
+    try {
+      await this.view.webContents.loadURL(url);
+    } finally {
+      this.pendingUrl = '';
+    }
     return this.state();
   }
 

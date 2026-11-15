@@ -1447,7 +1447,13 @@ function onChatEvent(event) {
       renderTerminalTabs();
       renderTerminal();
       break;
-    case 'browser-state':
+    case 'browser-state': {
+      const appEl = $('#app');
+      const needsPanel = Boolean(event.visible) && (
+        state.activePanelTab !== 'browser'
+        || appEl?.classList.contains('panel-collapsed')
+        || (state.surface === 'chat' && !appEl?.classList.contains('browser-open'))
+      );
       state.browserState = {
         visible: Boolean(event.visible),
         url: event.url || '',
@@ -1458,9 +1464,9 @@ function onChatEvent(event) {
       };
       updateBrowserToolbar();
       if (event.error) toast(`Browser error: ${event.error}`);
-      if (event.visible) openBrowserPanel({ focusInput: false });
-      else syncBrowserView();
+      if (needsPanel) openBrowserPanel({ focusInput: false });
       break;
+    }
     case 'todos':
       if (state.session) state.session.todos = event.items || [];
       renderTodos(event.items || []);
@@ -1834,6 +1840,8 @@ function updateBrowserToolbar() {
   if (empty) empty.classList.toggle('hidden', Boolean(b.url));
 }
 
+let lastBrowserBoxKey = '';
+
 function syncBrowserView() {
   const appEl = $('#app');
   const viewport = $('#browser-viewport');
@@ -1841,14 +1849,20 @@ function syncBrowserView() {
   const anyModal = Boolean(state.keysOpen || state.memoryOpen || state.mcpOpen || state.hooksOpen || state.helperOpen);
   const panelOpen = !appEl.classList.contains('panel-collapsed')
     && (state.surface === 'code' || appEl.classList.contains('browser-open'));
-  const shouldShow = state.activePanelTab === 'browser' && panelOpen && !anyModal && Boolean(state.browserState?.url);
+  const shouldShow = state.activePanelTab === 'browser' && panelOpen && !anyModal && Boolean(state.browserState?.url || state.browserState?.loading);
   if (!shouldShow) {
-    api.invoke('browser:hide').catch(() => {});
+    if (lastBrowserBoxKey || state.browserState?.visible) {
+      lastBrowserBoxKey = '';
+      api.invoke('browser:hide').catch(() => {});
+    }
     return;
   }
   const rect = viewport.getBoundingClientRect();
   if (rect.width < 20 || rect.height < 20) {
-    api.invoke('browser:hide').catch(() => {});
+    if (lastBrowserBoxKey || state.browserState?.visible) {
+      lastBrowserBoxKey = '';
+      api.invoke('browser:hide').catch(() => {});
+    }
     return;
   }
   const box = {
@@ -1857,6 +1871,9 @@ function syncBrowserView() {
     width: Math.round(rect.width),
     height: Math.round(rect.height),
   };
+  const boxKey = `${box.x},${box.y},${box.width},${box.height}`;
+  if (state.browserState?.visible && boxKey === lastBrowserBoxKey) return;
+  lastBrowserBoxKey = boxKey;
   api.invoke('browser:show', box).catch(() => {});
 }
 

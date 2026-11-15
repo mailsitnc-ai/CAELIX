@@ -1,5 +1,11 @@
 # CAELIX changelog
 
+## 0.1.17 — Fix AI chat titles on reasoning models (no raw question overwrite)
+
+- **Root cause fixed (`src/engine/index.js`, `src/main.js`):** Live probing against NVIDIA (`nvidia/nemotron-3.5-lightning-30b-a3b`), Groq (`openai/gpt-oss-20b`), and OpenRouter (`openrouter/free`) showed that passing `maxTokens: 48` starved reasoning models (`reasoning_content` consumed all 48 tokens and returned empty `content`), forcing `maybeGenerateTitle()` back to the prompt text while `chat:send` also prematurely wrote the raw first question over `'New chat'`.
+- **Fixed:** Removed the raw first-question overwrite from `chat:send`, omitted the `max_tokens` cap (`maxTokens: null`, `timeoutMs: 25000`) in `Engine.maybeGenerateTitle()`, refined the title system prompt, added cross-provider title fallback across configured API providers before offline fallback, and stopped a `BrowserPanel.hide()` / `syncBrowserView()` feedback loop (`src/browser.js`, `src/renderer/app.js`) that could burn high CPU when hidden or closed.
+- **Verified:** Verified live AI title output across NVIDIA, Groq, and OpenRouter, updated `checks/verify_features.js` to assert `max_tokens` is omitted on title calls, rebuilt `dist/CAELIX.app`, and ran `doctor`, `verify_features.js`, `terminal-probe.js`, and `selfcheck`.
+
 ## 0.1.16 — Smart context efficiency, expanded 2M window, and automatic `/reset`
 
 - **Smart context efficiency & expanded window (`src/engine/tools.js`, `src/engine/index.js`):** Raised the local rolling chat window (`contextLimit`) to `2,000,000` (`1,000,000` on Groq), updated `contextReport()` to measure trimmed active AI memory instead of raw historical tool dumps, added default `300`-line / `16,000`-char smart slicing and long-line capping in `read_file` with tighter `list_dir`/`glob`/`grep` output caps, and added context-discipline guidance (`grep`/`glob` before `read_file`) to `systemPrompt()`.
