@@ -229,10 +229,16 @@ function createWindow() {
     },
   });
 
+  win.webContents.once('did-start-loading', () => trace('webContents: did-start-loading'));
+  win.webContents.once('dom-ready', () => trace('webContents: dom-ready'));
+  win.webContents.once('did-finish-load', () => trace('webContents: did-finish-load'));
+  const tLoadStart = Date.now();
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'))
-    .then(() => trace('createWindow: loadFile resolved'))
+    .then(() => trace(`createWindow: loadFile resolved (${Date.now() - tLoadStart}ms)`))
     .catch((error) => trace(`createWindow: loadFile failed: ${error.message}`));
+  const tBrowserStart = Date.now();
   browserPanel = new BrowserPanel(win, (event) => emit(event));
+  trace(`createWindow: BrowserPanel created (${Date.now() - tBrowserStart}ms)`);
   win.once('ready-to-show', () => {
     trace('createWindow: ready-to-show fired');
     windowReadyMs = Date.now() - PROCESS_STARTED;
@@ -369,10 +375,15 @@ function registerIpc() {
     chatRoot: chatRoot(),
     windowReadyMs,
     firstPaintMs,
-    encryption: safeStorage.isEncryptionAvailable(),
+    encryption: SELF_CHECK ? true : safeStorage.isEncryptionAvailable(),
   }));
 
   ipcMain.handle('providers:list', () => {
+    const version = app.getVersion();
+    if (settings.get('providerCatalogVersion') !== version) {
+      settings.set('providerModels', {});
+      settings.set('providerCatalogVersion', version);
+    }
     const cached = settings.get('providerModels', {});
     return providerList(SELF_CHECK).map((p) => ({
       ...p,
