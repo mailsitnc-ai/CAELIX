@@ -105,6 +105,52 @@ function normalizeToolCall(call) {
   return { ...call, name, input: rawInput };
 }
 
+// Keep every tool response strictly paired with the immediately preceding
+// assistant message whose tool_calls requested it, and drop unanswered tool_calls
+// on interrupted turns so strict OpenAI/DeepSeek validators never return 400.
+function sanitizeToolHistory(list) {
+  const out = [];
+  let pendingAssistant = null;
+  let expectedIds = new Set();
+  let answeredIds = new Set();
+
+  const finalizePending = () => {
+    if (!pendingAssistant) return;
+    if (answeredIds.size < expectedIds.size) {
+      pendingAssistant.toolCalls = pendingAssistant.toolCalls.filter((c) => c?.id && answeredIds.has(c.id));
+    }
+    pendingAssistant = null;
+    expectedIds = new Set();
+    answeredIds = new Set();
+  };
+
+  for (const msg of list || []) {
+    if (!msg || !msg.role) continue;
+    if (msg.role === 'tool') {
+      const callId = msg.toolCallId;
+      if (pendingAssistant && callId && expectedIds.has(callId) && !answeredIds.has(callId)) {
+        answeredIds.add(callId);
+        out.push({ ...msg });
+      }
+      continue;
+    }
+    finalizePending();
+    if (msg.role === 'assistant') {
+      const toolCalls = Array.isArray(msg.toolCalls) ? msg.toolCalls.filter((c) => c?.id && c?.name) : [];
+      const clone = { ...msg, toolCalls };
+      out.push(clone);
+      if (toolCalls.length) {
+        pendingAssistant = clone;
+        expectedIds = new Set(toolCalls.map((c) => c.id));
+      }
+      continue;
+    }
+    out.push({ ...msg });
+  }
+  finalizePending();
+  return out;
+}
+
 function buildTurnSummary({ status, elapsedMs, stepsLog = [], changes = [], error = null }) {
   const completed = stepsLog.filter((s) => s.ok);
   const failed = stepsLog.filter((s) => !s.ok);
@@ -555,8 +601,9 @@ class Engine {
   buildConversation(session, incoming) {
     const merged = [...this.activeMessages(session), ...(incoming || [])]
       .filter((message) => message && (message.role === 'user' || message.role === 'assistant' || message.role === 'tool'));
-    const slice = merged.slice(-60);
-    let history = this.trimHistoryForContext(slice, session);
+    let slice = merged.slice(-60);
+    while (slice.length && slice[0].role === 'tool') slice.shift();
+    let history = sanitizeToolHistory(this.trimHistoryForContext(slice, session));
     const system = { role: 'system', content: this.systemPrompt(session) };
     let total = estimateTokens(system.content);
     for (const message of history) total += estimateTokens(message.content || '');
@@ -565,7 +612,13 @@ class Engine {
       const removed = history.shift();
       total -= estimateTokens(removed.content || '');
       dropped += 1;
+      while (history.length > 8 && history[0]?.role === 'tool') {
+        const extra = history.shift();
+        total -= estimateTokens(extra.content || '');
+        dropped += 1;
+      }
     }
+    history = sanitizeToolHistory(history);
     if (dropped > 0) {
       history = [{
         role: 'user',
@@ -725,7 +778,8 @@ class Engine {
         if (repeatStreak >= 4) {
           haltedByLoop = true;
           emit({ type: 'status', stage: 'budget', message: 'Stopped repeated identical tool loop — wrapping up…' });
-          for (const call of assistant.toolCalls) {
+          const pendingImageMessages = [];
+        for (const call of assistant.toolCalls) {
             messages.push({
               role: 'tool',
               toolCallId: call.id,
@@ -738,7 +792,8 @@ class Engine {
         }
         if (repeatStreak === 3) {
           emit({ type: 'status', stage: 'budget', message: 'Detected repeated tool call — nudging model to try a new step…' });
-          for (const call of assistant.toolCalls) {
+          const pendingImageMessages = [];
+        for (const call of assistant.toolCalls) {
             const msg = `Notice: you called ${call.name} with the exact same arguments 3 times in a row. Change your arguments, search for a different tool, or answer the user directly.`;
             emit({ type: 'tool-start', id: call.id, name: call.name, input: call.input });
             emit({ type: 'tool-result', id: call.id, name: call.name, ok: false, output: msg, durationMs: 0 });
@@ -753,6 +808,7 @@ class Engine {
           continue;
         }
 
+        const pendingImageMessages = [];
         for (const call of assistant.toolCalls) {
           if (controller.signal.aborted) throw new Error('Cancelled.');
           interactivePermissionDenied = false;
@@ -831,7 +887,7 @@ class Engine {
               createdAt: Date.now(),
             });
             if (output.imageDataUrl) {
-              messages.push({
+              pendingImageMessages.push({
                 role: 'user',
                 hidden: true,
                 content: `Image returned by ${call.name} (${call.input?.path || 'image'}).`,
@@ -875,6 +931,7 @@ class Engine {
             }
           }
         }
+        if (pendingImageMessages.length) messages.push(...pendingImageMessages);
         if (haltedByPermission) break;
       }
 
@@ -1421,7 +1478,7 @@ class Engine {
       content: `[Compacted context summary]\n${summaryText}`,
       createdAt: Date.now(),
     };
-    const nextMessages = [...archived, summaryMsg, ...tail];
+    const nextMessages = [...archived, summaryMsg, ...sanitizeToolHistory(tail)];
     if (typeof this.sessions.update === 'function') {
       this.sessions.update(sessionId, { messages: nextMessages, contextOffset: archived.length });
     } else {

@@ -1,5 +1,11 @@
 # CAELIX changelog
 
+## 0.1.23 — Fix orphaned `tool` message `400` errors on DeepSeek and long chats
+
+- **Root cause fixed (`src/engine/index.js`):** When a chat exceeded `60` messages (`merged.slice(-60)` in `buildConversation`), compacted above 100k tokens (`history.shift()`), or hit an interrupted multi-tool turn (such as `read_file` image attachment carriers inserted mid-tool-loop or permission halts), `messages[1]` could start with an orphaned `role: 'tool'` message or leave unmatched `tool_calls`. Strict OpenAI/DeepSeek endpoints (such as Coarena `deepseek-v4-1-flash-1017`) rejected the turn with `400: messages[1] answers tool call ..., which the assistant message before it did not make`.
+- **Fixed:** Added `sanitizeToolHistory()` and bound-safe `buildConversation` / `compactSession` slicing so every `role: 'tool'` message stays strictly paired with its preceding `assistant.toolCalls` and unanswered partial `tool_calls` are cleanly trimmed—repairing even older chats already saved on disk. Also deferred hidden `read_file` image carrier user messages in `Engine.send()` until after the entire `assistant.toolCalls` loop finishes so multi-tool turns remain contiguous.
+- **Verified:** Added >60-message `slice(-60)` boundary + partial-tool invariant tests in `checks/verify_features.js`, verified live `deepseek-v4-1-flash-1017` on Coarena against a repaired >60-message tool history, rebuilt `dist/CAELIX.app` (`0.1.23`), and ran `doctor`, `verify_features.js`, `terminal-probe.js`, and `selfcheck`.
+
 ## 0.1.22 — Coarena free-tier defaults, `402` spillover fix, and readable `504` gateway errors
 
 - **Root cause fixed (`src/engine/providers.js`, `src/engine/index.js`):** Live testing with stored Coarena keys showed `gpt-6-1-sol` and `gpt-6-astra` return `402` on free Coarena accounts (`not part of the free tier` — free accounts can use `gpt-6-luna`, `gemini-3-8-flash`, and `deepseek-v4-1-flash-1017`). Previously, `Engine.completeWithFailover()` caught `402` and spilled across providers, hitting an upstream `504 Gateway Time-out` HTML page after `33s` and hiding the real `402` explanation.
