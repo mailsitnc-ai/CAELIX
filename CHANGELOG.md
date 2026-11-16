@@ -1,5 +1,15 @@
 # CAELIX changelog
 
+## 0.1.28 — Fix Numes `dealignai` cold-start failures, preserve Gemini `thought_signature`, and expand verified free catalog to `47` models
+
+- **Fix Numes `dealignai/*` & `uniboshi` Code-mode failures (`src/engine/providers.js`, `src/engine/index.js`):** Multi-turn testing (`checks/diagnose-numes-and-scour.js`) showed Numes community/uncensored endpoints (`dealignai/*`, `uniboshi/kimi-k3-abliterated-v1`) regularly cold-start for `35–60s` before their first byte, previously failing at CAELIX's `35s` timeout (`408`) or `503` without failover. Raised Numes' default request timeout to `60s` and added `isNumesUnavailable` (`408`/`503`) failover in `Engine.completeWithFailover()` to rotate to `deepseek/deepseek-v4.1-flash`, `moonshotai/kimi-k3.1-pro`, or `z-ai/glm-5.3`.
+- **Fix Gemini `400 missing thought_signature` on multi-round / spillover tool calls (`src/engine/providers.js`, `src/engine/index.js`):** Captured `delta.tool_calls[].extra_content` (`thought_signature`) during streaming and replayed it in `normalizeMessages()`, while blocking mid-turn cross-provider spillover into `gemini` when earlier `tool_calls` lack `extraContent`.
+- **Expanded verified free models (`47` working free models across all providers):**
+  - **Numes:** Restored all `7` live `$0/token` models (plus `4` Claude slots): `deepseek/deepseek-v4.1-flash`, `z-ai/glm-5.3`, `moonshotai/kimi-k3.1-pro`, `dealignai/glm-5.3-flash-uncensored-fp8`, `dealignai/deepseek-v4.1-flash-uncensored-fp8`, `dealignai/glm-5.3-uncensored-fp8`, and `uniboshi/kimi-k3-abliterated-v1`.
+  - **OpenRouter:** Added verified `200 OK` `inclusionai/ling-3.2-flash:free` (`1M` context, tools) alongside the other `13` `:free` models (`14` free + `5` Claude).
+  - **Google Gemini:** Added `gemini-3.8-flash`, `gemini-flash-latest`, and `gemma-4-26b-a4b-it` (`10` free-tier models total).
+  - **NVIDIA NIM:** Added `minimaxai/minimax-m3.1-flash` and `meta/muse-glimmer-30b` (`9` free models total).
+
 ## 0.1.27 — Fix `gpt-6-luna` queue-heartbeat freeze and remove stalling Numes model
 
 - **Fix `gpt-6-luna` / Coarena queue freeze (`src/engine/providers.js`, `src/engine/index.js`):** Coarena streams SSE keepalive comments (`: ...`) while queued, which previously reset the `35s` stall timer unconditionally on every heartbeat (`resetStall()` in both `trimmed.startsWith(':')` and `reader.read()`), allowing a stuck queue request to hang forever instead of timing out or failing over. `streamOpenAICompatible()` now resets `stallTimer` only when real output arrives (`delta.content`, `delta.reasoning*`, `delta.tool_calls`, or `finish_reason`), and `Engine.completeWithFailover()` treats Coarena `408`/stall errors as failover-eligible (`isCoarenaStall`) to rotate keys or switch cleanly to `gemini-3-8-flash` / `deepseek-v4-1-flash-1017`.

@@ -14,7 +14,10 @@ const PROVIDERS = {
       'gemini-3.1-flash-lite-preview',
       'gemini-flash-lite-latest',
       'gemini-4-hydrogen',
+      'gemini-3.8-flash',
+      'gemini-flash-latest',
       'gemma-4-31b-it',
+      'gemma-4-26b-a4b-it',
     ],
     defaultModel: 'gemini-3-flash-preview',
     color: '#4285f4',
@@ -32,6 +35,7 @@ const PROVIDERS = {
       'nvidia/nemotron-3.5-lightning:free',
       'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
       'cohere/north-mini-code:free',
+      'inclusionai/ling-3.2-flash:free',
       'baidu/ernie-5.5-flash-preview:free',
       'particle-ai/particle-1:free',
       'dots-studio/dots-3-note-preview:free',
@@ -62,6 +66,8 @@ const PROVIDERS = {
       'mistralai/mistral-large-4-1t-a52b',
       'nvidia/nemotron-3.5-bolt-e4b',
       'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+      'minimaxai/minimax-m3.1-flash',
+      'meta/muse-glimmer-30b',
     ],
     defaultModel: 'nvidia/nemotron-3.5-lightning-30b-a3b',
     color: '#76b900',
@@ -114,6 +120,8 @@ const PROVIDERS = {
       'moonshotai/kimi-k3.1-pro',
       'dealignai/glm-5.3-flash-uncensored-fp8',
       'dealignai/deepseek-v4.1-flash-uncensored-fp8',
+      'dealignai/glm-5.3-uncensored-fp8',
+      'uniboshi/kimi-k3-abliterated-v1',
       'anthropic/claude-opus-5.5',
       'anthropic/claude-sonnet-5.5',
       'anthropic/claude-haiku-5.5',
@@ -173,7 +181,10 @@ const MODEL_NOTES = {
   'gemini-3.1-flash-lite-preview': 'Verified free · Preview lite · Tools',
   'gemini-flash-lite-latest': 'Verified free · Always latest lite · Tools',
   'gemini-4-hydrogen': 'Verified free · Flagship Gemini 4 Hydrogen · Tools',
-  'gemma-4-31b-it': 'Verified free · Gemma 4 31B on Google AI Studio',
+  'gemini-3.8-flash': 'Free tier · Fast 3.8 Flash (high-demand peaks)',
+  'gemini-flash-latest': 'Free tier · Latest Flash alias',
+  'gemma-4-31b-it': 'Free tier · Gemma 4 31B on Google AI Studio',
+  'gemma-4-26b-a4b-it': 'Free tier · Gemma 4 26B MoE on Google AI Studio',
   'qwen/qwen3.8-27b': 'Fastest verified · High headroom · Separate Groq bucket',
   'openai/gpt-oss-120b': 'Heavy · Eats free TPM quickly',
   'openai/gpt-oss-20b': 'Fast tool caller · Good free TPM',
@@ -190,12 +201,15 @@ const MODEL_NOTES = {
   'mistralai/mistral-large-4-1t-a52b': '40 RPM · Verified live · Large Mistral & tools',
   'nvidia/nemotron-3.5-bolt-e4b': '40 RPM · Verified live · Ultra-fast tools',
   'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning': '40 RPM · Verified live · Compact reasoning',
+  'minimaxai/minimax-m3.1-flash': '40 RPM · Free tier · Slower (~22s) · Tools',
+  'meta/muse-glimmer-30b': '40 RPM · Free tier · Muse Glimmer 30B',
   'openrouter/free': 'Free router · Verified live · Tools',
   'nvidia/nemotron-3-ultra-550b-a55b:free': 'Free · Verified live · 1M context · Tools',
   'nvidia/nemotron-3.5-super-vl:free': 'Free · Verified live · 1M context · Vision & tools',
   'nvidia/nemotron-3.5-lightning:free': 'Free · Verified live · 1M context · Fast tools',
   'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free': 'Free · Verified live · 256k · Fast reasoning',
   'cohere/north-mini-code:free': 'Free · Verified live · 256k coding specialist',
+  'inclusionai/ling-3.2-flash:free': 'Free · Verified live · 1M context · Tools',
   'baidu/ernie-5.5-flash-preview:free': 'Free · Verified live · 1M context · Tools',
   'particle-ai/particle-1:free': 'Free · Verified live · 1M context · Tools',
   'dots-studio/dots-3-note-preview:free': 'Free · Verified live · 512k context · Tools',
@@ -220,9 +234,10 @@ const MODEL_NOTES = {
   'deepseek/deepseek-v4.1-flash': 'Numes · $0/token free tier · 1M · Tools · Default',
   'moonshotai/kimi-k3.1-pro': 'Numes · $0/token free tier · 1M · Tools & reasoning',
   'z-ai/glm-5.3': 'Numes · $0/token free tier · 262k · Flagship GLM · Tools',
-  'dealignai/deepseek-v4.1-flash-uncensored-fp8': 'Numes · $0/token · Third-party uncensored variant',
-  'dealignai/glm-5.3-flash-uncensored-fp8': 'Numes · $0/token · Third-party uncensored variant',
-  'dealignai/glm-5.3-uncensored-fp8': 'Numes · $0/token · Third-party uncensored variant',
+  'dealignai/deepseek-v4.1-flash-uncensored-fp8': 'Numes · $0/token · Slow cold-start (auto-fails over)',
+  'dealignai/glm-5.3-flash-uncensored-fp8': 'Numes · $0/token · Fast uncensored GLM Flash',
+  'dealignai/glm-5.3-uncensored-fp8': 'Numes · $0/token · Slower uncensored GLM (60s window)',
+  'uniboshi/kimi-k3-abliterated-v1': 'Numes · $0/token · 1M uncensored Kimi K3',
   'anthropic/claude-fable-5.2': 'Claude · Paid credits · Fable 5.2',
 };
 
@@ -271,6 +286,7 @@ function normalizeMessages(messages) {
           id: call.id,
           type: 'function',
           function: { name: call.name, arguments: JSON.stringify(call.input || {}) },
+          ...(call.extraContent ? { extra_content: call.extraContent } : {}),
         })),
       };
     }
@@ -454,7 +470,7 @@ async function streamOpenAICompatible(options) {
     provider, model, apiKey, messages, tools, signal, onDelta, onStatus,
     compactToolSchemas = true,
     maxTokens = null,
-    timeoutMs = Number(process.env.CAELIX_REQUEST_TIMEOUT_MS) || 35_000,
+    timeoutMs = Number(process.env.CAELIX_REQUEST_TIMEOUT_MS) || (provider === 'numes' ? 60_000 : 35_000),
   } = options;
   const meta = PROVIDERS[provider];
   if (!meta || !meta.baseUrl) throw new Error(`Unknown provider: ${provider}`);
@@ -588,8 +604,9 @@ async function streamOpenAICompatible(options) {
         if (waitNoticeTimer) { clearTimeout(waitNoticeTimer); waitNoticeTimer = null; }
         for (const part of delta.tool_calls) {
           const index = part.index || 0;
-          const current = calls.get(index) || { id: '', name: '', arguments: '' };
+          const current = calls.get(index) || { id: '', name: '', arguments: '', extraContent: null };
           if (part.id) current.id = part.id;
+          if (part.extra_content) current.extraContent = part.extra_content;
           if (part.function?.name) current.name += part.function.name;
           if (part.function?.arguments) current.arguments += part.function.arguments;
           calls.set(index, current);
@@ -630,7 +647,12 @@ async function streamOpenAICompatible(options) {
         } catch {
           input = { raw: call.arguments };
         }
-        return { id: call.id || `call_${Math.random().toString(36).slice(2)}`, name: call.name, input };
+        return {
+          id: call.id || `call_${Math.random().toString(36).slice(2)}`,
+          name: call.name,
+          input,
+          ...(call.extraContent ? { extraContent: call.extraContent } : {}),
+        };
       });
 
     return { text, toolCalls, usage, finishReason };
@@ -853,7 +875,6 @@ function filterLiveProviderRow(provider, item) {
   }
   if (provider === 'numes') {
     if (isClaudeId(id)) return true;
-    if (/kimi-k3-abliterated|dealignai\/glm-5\.3-uncensored-fp8$/i.test(id)) return false;
     if (!item?.pricing) return true; // Allows mock unit-test catalogs without pricing fields
     return isZeroPriceRow(item);
   }

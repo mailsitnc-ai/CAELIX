@@ -1127,19 +1127,23 @@ class Engine {
           && (status === 408 || /did not respond within/i.test(error.message));
         const isCoarenaStall = activeProviderId === 'coarena'
           && (status === 408 || /did not respond within|stalled/i.test(error.message));
+        const isNumesUnavailable = activeProviderId === 'numes'
+          && (status === 408 || status === 503 || /did not respond within|stalled|no numes endpoint/i.test(error.message));
         const isCoarenaUnavailable = activeProviderId === 'coarena' && (status === 404 || status === 503 || isCoarenaStall);
         const retryable = isRateLimit || status === 408 || status >= 500
           || /fetch failed|network|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(error.message);
         const fast = process.env.CAELIX_FAST_RETRY === '1';
 
-        if ((isKeyAuthOrQuota || isNvidiaStall || isCoarenaUnavailable) && !emitted) {
+        if ((isKeyAuthOrQuota || isNvidiaStall || isCoarenaUnavailable || isNumesUnavailable) && !emitted) {
           const coolMs = fast ? 120 : (isRateLimit ? (error.retryAfterMs || 60_000) : 300_000);
           const scope = isRateLimit && MODEL_FAILOVER[activeProviderId] ? 'model' : 'key';
-          // A stall is a model problem, not a key problem: never cool the key down for it.
-          if (!isNvidiaStall && !isCoarenaUnavailable && status !== 404) this.markKeyCooldown(activeProviderId, picked.index, coolMs, activeModelId, scope);
+          // A stall or single unavailable endpoint is a model problem, not a key problem: never cool the key down for it.
+          if (!isNvidiaStall && !isCoarenaUnavailable && !isNumesUnavailable && status !== 404) {
+            this.markKeyCooldown(activeProviderId, picked.index, coolMs, activeModelId, scope);
+          }
 
           // Level 1: try another healthy key within the same provider first (not for model-wide 404 or a stall)
-          if (!isNvidiaStall && !isCoarenaUnavailable && status !== 404 && pool.length > 1 && rotationCount < pool.length * 2) {
+          if (!isNvidiaStall && !isCoarenaUnavailable && !isNumesUnavailable && status !== 404 && pool.length > 1 && rotationCount < pool.length * 2) {
             const nextKey = this.pickKey(activeProviderId, activeModelId);
             if (!nextKey.allCooled) {
               rotationCount += 1;
@@ -1155,6 +1159,9 @@ class Engine {
           // Level 2 & 3: spill over to a higher-headroom sibling model or another saved provider
           triedTargets.add(`${activeProviderId}:${activeModelId}`);
           const candidates = this.listFailoverTargets(activeProviderId, activeModelId);
+          // Gemini rejects prior assistant tool_calls lacking Google thought_signature;
+          // avoid mid-turn spillover into Gemini once unsigned tool calls are in history.
+          const hasUnsignedToolCalls = messages.some((m) => m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.some((c) => !c.extraContent));
           // NVIDIA 404s and stalls are model-level: try the models verified to
           // serve this account class before spilling over to another provider.
           if (activeProviderId === 'nvidia' && (status === 404 || isNvidiaStall)) {
@@ -1167,10 +1174,15 @@ class Engine {
             for (const alt of (PROVIDERS.coarena?.models || []).slice(0, 3).reverse()) {
               if (alt !== activeModelId) candidates.unshift({ provider: 'coarena', model: alt, tier: 'sibling-model' });
             }
+          } else if (isNumesUnavailable) {
+            for (const alt of (MODEL_FAILOVER.numes || []).slice().reverse()) {
+              if (alt !== activeModelId) candidates.unshift({ provider: 'numes', model: alt, tier: 'sibling-model' });
+            }
           }
           if (switchCount < 6) {
             const nextCandidate = candidates.find((c) => {
               if (triedTargets.has(`${c.provider}:${c.model}`)) return false;
+              if (c.provider === 'gemini' && hasUnsignedToolCalls) return false;
               const p = this.pickKey(c.provider, c.model);
               return p.poolSize > 0 && !p.allCooled;
             });
