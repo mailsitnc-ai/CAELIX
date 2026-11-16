@@ -110,11 +110,10 @@ const PROVIDERS = {
     probeUrl: 'https://api.numes.ai/api/v1/key',
     models: [
       'deepseek/deepseek-v4.1-flash',
-      'moonshotai/kimi-k3.1-pro',
       'z-ai/glm-5.3',
-      'dealignai/deepseek-v4.1-flash-uncensored-fp8',
+      'moonshotai/kimi-k3.1-pro',
       'dealignai/glm-5.3-flash-uncensored-fp8',
-      'dealignai/glm-5.3-uncensored-fp8',
+      'dealignai/deepseek-v4.1-flash-uncensored-fp8',
       'anthropic/claude-opus-5.5',
       'anthropic/claude-sonnet-5.5',
       'anthropic/claude-haiku-5.5',
@@ -542,7 +541,8 @@ async function streamOpenAICompatible(options) {
       const trimmed = line.trim();
       if (!trimmed) return;
       if (trimmed.startsWith(':')) {
-        resetStall();
+        // Keepalive SSE comments mean the socket is open, not that tokens are
+        // flowing — do not reset stallTimer forever while queued with 0 output.
         if (!text && !reasoningChars) {
           onStatus?.({ stage: 'waiting', message: `Queued on ${meta.name} (${model})…` });
         }
@@ -557,16 +557,19 @@ async function streamOpenAICompatible(options) {
       } catch {
         return;
       }
-      resetStall();
       if (payload.usage) usage = payload.usage;
       const choice = payload.choices && payload.choices[0];
       if (!choice) return;
-      if (choice.finish_reason) finishReason = choice.finish_reason;
+      if (choice.finish_reason) {
+        finishReason = choice.finish_reason;
+        resetStall();
+      }
       const delta = choice.delta || {};
       const reasoningPiece = typeof delta.reasoning_content === 'string'
         ? delta.reasoning_content
         : typeof delta.reasoning === 'string' ? delta.reasoning : '';
       if (reasoningPiece) {
+        resetStall();
         reasoningChars += reasoningPiece.length;
         const now = Date.now();
         if (!text && (now - lastReasoningNotice >= 350 || reasoningChars === reasoningPiece.length)) {
@@ -575,11 +578,13 @@ async function streamOpenAICompatible(options) {
         }
       }
       if (typeof delta.content === 'string' && delta.content) {
+        resetStall();
         if (waitNoticeTimer) { clearTimeout(waitNoticeTimer); waitNoticeTimer = null; }
         text += delta.content;
         onDelta(delta.content);
       }
       if (Array.isArray(delta.tool_calls)) {
+        resetStall();
         if (waitNoticeTimer) { clearTimeout(waitNoticeTimer); waitNoticeTimer = null; }
         for (const part of delta.tool_calls) {
           const index = part.index || 0;
@@ -596,7 +601,6 @@ async function streamOpenAICompatible(options) {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        resetStall();
         buffer += decoder.decode(value, { stream: true });
         let newline = buffer.indexOf('\n');
         while (newline >= 0) {
@@ -849,7 +853,7 @@ function filterLiveProviderRow(provider, item) {
   }
   if (provider === 'numes') {
     if (isClaudeId(id)) return true;
-    if (/kimi-k3-abliterated/i.test(id)) return false;
+    if (/kimi-k3-abliterated|dealignai\/glm-5\.3-uncensored-fp8$/i.test(id)) return false;
     if (!item?.pricing) return true; // Allows mock unit-test catalogs without pricing fields
     return isZeroPriceRow(item);
   }

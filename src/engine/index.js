@@ -1125,7 +1125,9 @@ class Engine {
         const isKeyAuthOrQuota = isRateLimit || status === 401 || status === 402 || status === 403 || status === 404;
         const isNvidiaStall = activeProviderId === 'nvidia'
           && (status === 408 || /did not respond within/i.test(error.message));
-        const isCoarenaUnavailable = activeProviderId === 'coarena' && (status === 404 || status === 503);
+        const isCoarenaStall = activeProviderId === 'coarena'
+          && (status === 408 || /did not respond within|stalled/i.test(error.message));
+        const isCoarenaUnavailable = activeProviderId === 'coarena' && (status === 404 || status === 503 || isCoarenaStall);
         const retryable = isRateLimit || status === 408 || status >= 500
           || /fetch failed|network|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(error.message);
         const fast = process.env.CAELIX_FAST_RETRY === '1';

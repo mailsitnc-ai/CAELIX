@@ -1,5 +1,11 @@
 # CAELIX changelog
 
+## 0.1.27 — Fix `gpt-6-luna` queue-heartbeat freeze and remove stalling Numes model
+
+- **Fix `gpt-6-luna` / Coarena queue freeze (`src/engine/providers.js`, `src/engine/index.js`):** Coarena streams SSE keepalive comments (`: ...`) while queued, which previously reset the `35s` stall timer unconditionally on every heartbeat (`resetStall()` in both `trimmed.startsWith(':')` and `reader.read()`), allowing a stuck queue request to hang forever instead of timing out or failing over. `streamOpenAICompatible()` now resets `stallTimer` only when real output arrives (`delta.content`, `delta.reasoning*`, `delta.tool_calls`, or `finish_reason`), and `Engine.completeWithFailover()` treats Coarena `408`/stall errors as failover-eligible (`isCoarenaStall`) to rotate keys or switch cleanly to `gemini-3-8-flash` / `deepseek-v4-1-flash-1017`.
+- **Numes live Engine + tool-call audit (`src/engine/providers.js`, `checks/investigate-issues.js`):** Verified all `5` working `$0/token` Numes models through full streaming + 23-tool `Engine` turns (`deepseek/deepseek-v4.1-flash`, `z-ai/glm-5.3`, `moonshotai/kimi-k3.1-pro`, `dealignai/glm-5.3-flash-uncensored-fp8`, `dealignai/deepseek-v4.1-flash-uncensored-fp8`) and removed `dealignai/glm-5.3-uncensored-fp8`, which timed out past `35s` on multi-round tool use.
+- **Verified:** Verified on both stored Coarena keys (`••••••••8585`, `••••••••1190`) that `gpt-6-luna` streams + executes `read_file`/`list_dir` in `1.9–4.0s` while all `6` Coarena Claude models return `402` (free accounts are restricted to `gpt-6-luna`, `gemini-3-8-flash`, and `deepseek-v4-1-flash-1017` until credits are added). Added SSE-keepalive stall regression check (`32` checks in `checks/verify_features.js`), rebuilt `dist/CAELIX.app` (`0.1.27`), and verified `doctor`, `verify_features.js`, `terminal-probe.js`, and `selfcheck`.
+
 ## 0.1.26 — Live-tested free-only + Claude model catalogs
 
 - **Scoured and live-tested every model across all 8 stored keys (`checks/scour-free-models.js`, `checks/scour-followup.js`):** Replaced unverified, retired, and paid non-Claude entries in `src/engine/providers.js` with verified working free models plus Claude models (`except claude models`).

@@ -574,7 +574,7 @@ async function run(context) {
       const openrouterModels = await evaluate('window.__caelixState.providers.find(p => p.id === "openrouter")?.models?.length || 0');
       if (openrouterModels < 15) throw new Error(`Expected >= 15 OpenRouter (free + Claude) models, got ${openrouterModels}`);
       const numesModels = await evaluate('window.__caelixState.providers.find(p => p.id === "numes")?.models?.length || 0');
-      if (numesModels < 10) throw new Error(`Expected >= 10 Numes (free + Claude) models, got ${numesModels}`);
+      if (numesModels < 9) throw new Error(`Expected >= 9 Numes (free + Claude) models, got ${numesModels}`);
       await click('#keys-btn');
       await waitFor('!!document.querySelector("#key-input-groq")', 3000, 'groq key input in Keys modal');
       await waitFor('!!document.querySelector("#key-input-coarena")', 3000, 'coarena key input in Keys modal');
