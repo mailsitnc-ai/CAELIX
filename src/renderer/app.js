@@ -2156,7 +2156,7 @@ async function saveMemory() {
 function syncProviderCatalogs(onlyPid = null) {
   const targets = onlyPid
     ? [onlyPid, ...(onlyPid !== 'nvidia' ? ['nvidia'] : [])]
-    : state.providers.filter((p) => !p.keyless && (p.id === 'nvidia' || p.id === 'coarena' || state.keys.some((k) => k.id === p.id && k.configured))).map((p) => p.id);
+    : state.providers.filter((p) => !p.keyless && (p.id === 'nvidia' || p.id === 'coarena' || p.id === 'ollama' || state.keys.some((k) => k.id === p.id && k.configured))).map((p) => p.id);
   return Promise.allSettled(targets.map(async (pid) => {
     const res = await api.invoke('providers:refresh', { provider: pid });
     const target = state.providers.find((item) => item.id === pid);

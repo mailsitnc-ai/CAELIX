@@ -535,6 +535,7 @@ class Engine {
   contextLimit(session) {
     const provider = session?.provider;
     if (provider === 'coarena') return 128000;
+    if (provider === 'ollama') return 262144;
     if (provider === 'groq') return 1000000;
     return 2000000;
   }

@@ -1,6 +1,12 @@
 # CAELIX changelog
 
-## 0.1.23 — Fix orphaned `tool` message `400` errors on DeepSeek and long chats
+## 0.1.24 — Built-in Ollama Cloud provider (`gpt-oss:120b`, coding & frontier catalog)
+
+- **Ollama Cloud provider (`src/engine/providers.js`, `src/engine/index.js`, `src/renderer/app.js`, `src/cli.js`):** Added **Ollama Cloud** (`https://ollama.com/v1/chat/completions`, key page `https://ollama.com/settings/keys`, public live catalog `https://ollama.com/v1/models`, CLI env `OLLAMA_API_KEY`) as a first-class provider with curated cloud models including `gpt-oss:120b` (default), `gpt-oss:20b`, `kimi-k2.7-code`, `deepseek-v4.1-flash`, `deepseek-v4-pro:0813`, `kimi-k3.1-pro`, `glm-5.3`, `glm-5.3-flash`, `mistral-large-4`, `minimax-m3.1-flash`, `nemotron-3-ultra`, `nemotron-3-super`, `gemma4:31b`, `mimo-v2.6-pro`, `mimo-v2.6-flash`, and `muse-spark-open`.
+- **Failover, catalog filtering & `262k` context safety:** Added Ollama Cloud to `PROVIDER_SPILLOVER` and `MODEL_FAILOVER.ollama`, filtered non-chat decision models (`clef:*`) from catalog sync, added `OLLAMA_TEST_FALLBACKS` + `401`/`429` friendly error messages, and set Ollama Cloud's context limit to `262144`.
+- **Verified:** Verified live Ollama Cloud `/v1/models` sync (`23` chat/tool models including `gpt-oss:120b`), added mock key-probe + streaming + tool-call checks to `checks/verify_features.js`, added Ollama catalog & `#key-input-ollama` checks to `src/selfcheck.js`, rebuilt `dist/CAELIX.app` (`0.1.24`), and ran `doctor`, `verify_features.js`, `terminal-probe.js`, and `selfcheck`.
+
+## 0.1.23 — Repair orphaned `tool` messages on DeepSeek and long chats
 
 - **Root cause fixed (`src/engine/index.js`):** When a chat exceeded `60` messages (`merged.slice(-60)` in `buildConversation`), compacted above 100k tokens (`history.shift()`), or hit an interrupted multi-tool turn (such as `read_file` image attachment carriers inserted mid-tool-loop or permission halts), `messages[1]` could start with an orphaned `role: 'tool'` message or leave unmatched `tool_calls`. Strict OpenAI/DeepSeek endpoints (such as Coarena `deepseek-v4-1-flash-1017`) rejected the turn with `400: messages[1] answers tool call ..., which the assistant message before it did not make`.
 - **Fixed:** Added `sanitizeToolHistory()` and bound-safe `buildConversation` / `compactSession` slicing so every `role: 'tool'` message stays strictly paired with its preceding `assistant.toolCalls` and unanswered partial `tool_calls` are cleanly trimmed—repairing even older chats already saved on disk. Also deferred hidden `read_file` image carrier user messages in `Engine.send()` until after the entire `assistant.toolCalls` loop finishes so multi-tool turns remain contiguous.

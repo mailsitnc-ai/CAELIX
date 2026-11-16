@@ -118,6 +118,33 @@ const PROVIDERS = {
     defaultModel: 'gpt-6-luna',
     color: '#06b6d4',
   },
+  ollama: {
+    id: 'ollama',
+    name: 'Ollama Cloud',
+    keyLabel: 'Ollama API key',
+    consoleUrl: 'https://ollama.com/settings/keys',
+    baseUrl: 'https://ollama.com/v1/chat/completions',
+    models: [
+      'gpt-oss:120b',
+      'gpt-oss:20b',
+      'kimi-k2.7-code',
+      'deepseek-v4.1-flash',
+      'deepseek-v4-pro:0813',
+      'kimi-k3.1-pro',
+      'glm-5.3',
+      'glm-5.3-flash',
+      'mistral-large-4',
+      'minimax-m3.1-flash',
+      'nemotron-3-ultra',
+      'nemotron-3-super',
+      'gemma4:31b',
+      'mimo-v2.6-pro',
+      'mimo-v2.6-flash',
+      'muse-spark-open',
+    ],
+    defaultModel: 'gpt-oss:120b',
+    color: '#f97316',
+  },
   omniroute: {
     id: 'omniroute',
     name: 'OmniRoute',
@@ -205,6 +232,17 @@ const MODEL_NOTES = {
   'gemini-4-argon': 'Paid credits · Coarena · Google · 128k · Vision & tools',
   'grok-4-7': 'Paid credits · Coarena · xAI · 128k · Vision & tools',
   'kimi-k3-1-pro': 'Paid credits · Coarena · Moonshot · 128k · Vision & tools',
+  'gpt-oss:120b': 'Ollama Cloud · OpenAI open-weight 120B · Tools & thinking',
+  'gpt-oss:20b': 'Ollama Cloud · Fast 20B · Tools & thinking',
+  'kimi-k2.7-code': 'Ollama Cloud · Coding specialist · Vision & tools',
+  'deepseek-v4.1-flash': 'Ollama Cloud · Fast reasoning & tools',
+  'deepseek-v4-pro:0813': 'Ollama Cloud · Heavy reasoning & tools',
+  'glm-5.3': 'Ollama Cloud · Flagship GLM · Tools & thinking',
+  'glm-5.3-flash': 'Ollama Cloud · Fast GLM · Vision & tools',
+  'mistral-large-4': 'Ollama Cloud · 1M context · Vision & tools',
+  'minimax-m3.1-flash': 'Ollama Cloud · 1M context · Vision & tools',
+  'nemotron-3-ultra': 'Ollama Cloud · 262k context · Heavy reasoning & tools',
+  'gemma4:31b': 'Ollama Cloud · Compact 31B · Vision & tools',
 };
 
 // Providers whose models carry separate RPM/TPM/RPD quota buckets.
@@ -213,14 +251,16 @@ const MODEL_FAILOVER = {
   groq: ['openai/gpt-oss-20b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-120b'],
   openrouter: ['openrouter/free', 'qwen/qwen3-coder:free', 'meta-llama/llama-3.3-70b-instruct:free', 'google/gemma-3-27b-it:free'],
   coarena: ['gpt-6-luna', 'gemini-3-8-flash', 'deepseek-v4-1-flash-1017'],
+  ollama: ['gpt-oss:120b', 'kimi-k2.7-code', 'deepseek-v4.1-flash', 'gpt-oss:20b'],
 };
 
 // Order when spilling over across different providers that have saved keys.
-const PROVIDER_SPILLOVER = ['gemini', 'nvidia', 'openrouter', 'groq'];
+const PROVIDER_SPILLOVER = ['gemini', 'nvidia', 'openrouter', 'ollama', 'groq'];
 const PROVIDER_HIGH_HEADROOM = {
   gemini: 'gemini-2.5-flash-lite',
   nvidia: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
   openrouter: 'openrouter/free',
+  ollama: 'gpt-oss:120b',
   groq: 'qwen/qwen3.8-27b',
 };
 
@@ -366,6 +406,14 @@ function friendlyDetail(provider, status, detail) {
     }
     if (status === 429) {
       return `${text ? `${text} — ` : ''}Coarena daily free limit or rate limit reached. Request a higher limit in Coarena or switch models/providers.`;
+    }
+  }
+  if (provider === 'ollama') {
+    if (status === 401) {
+      return 'Ollama Cloud rejected the API key. Copy or create a key at https://ollama.com/settings/keys and save it here in Keys.';
+    }
+    if (status === 429) {
+      return `${text ? `${text} — ` : ''}Ollama Cloud rate or usage limit reached. Add another key to rotate, switch models, or wait for reset.`;
     }
   }
   return text;
@@ -620,6 +668,13 @@ const COARENA_TEST_FALLBACKS = [
   'deepseek-v4-1-flash-1017',
 ];
 
+const OLLAMA_TEST_FALLBACKS = [
+  'gpt-oss:120b',
+  'gpt-oss:20b',
+  'kimi-k2.7-code',
+  'gemma4:31b',
+];
+
 async function probeModel(meta, provider, apiKey, targetModel) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
@@ -700,7 +755,9 @@ async function testKey(provider, apiKey, model = null) {
     ? [...new Set([targetModel, ...NVIDIA_TEST_FALLBACKS])]
     : provider === 'coarena'
       ? [...new Set([targetModel, ...COARENA_TEST_FALLBACKS])]
-      : [targetModel];
+      : provider === 'ollama'
+        ? [...new Set([targetModel, ...OLLAMA_TEST_FALLBACKS])]
+        : [targetModel];
   let lastError = null;
   for (const candidate of candidates) {
     try {
@@ -728,12 +785,14 @@ const MODELS_ENDPOINTS = {
   nvidia: 'https://integrate.api.nvidia.com/v1/models',
   groq: 'https://api.groq.com/openai/v1/models',
   coarena: 'https://coarena.ai/api/v1/models',
+  ollama: 'https://ollama.com/v1/models',
   omniroute: 'http://localhost:20128/v1/models',
 };
 
 const MODEL_EXCLUDES = {
   nvidia: /(embed|rerank|guard|safety|topic-control|nvclip|deplot|parse|synthetic-video|cosmos-reason|reward)/i,
   groq: /(whisper|orpheus|guard|safeguard|tts|playai)/i,
+  ollama: /^(clef:|embed|rerank)/i,
 };
 
 async function fetchProviderModels(provider, apiKey) {
