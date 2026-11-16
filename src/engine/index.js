@@ -537,6 +537,9 @@ class Engine {
     if (provider === 'coarena') return 128000;
     if (provider === 'ollama') return 262144;
     if (provider === 'groq') return 1000000;
+    // Numes: Nemotron models carry a 200k window; the rest (DeepSeek, Kimi,
+    // dealignai variants) are 1M per the provider's catalog.
+    if (provider === 'numes') return /nemotron/i.test(String(session?.model)) ? 200000 : 1000000;
     return 2000000;
   }
 

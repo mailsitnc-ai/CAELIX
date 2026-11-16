@@ -16,6 +16,9 @@ async function run(context) {
     app, win, engine, sessions, startedAt, getWindowReadyMs, getFirstPaintMs, getLastError, checksDir, workspace,
   } = context;
 
+  try {
+    await fsp.appendFile(path.join(checksDir, 'selfcheck-trace.txt'), `${new Date().toISOString()} selfcheck run() entered\n`);
+  } catch { /* diagnostics only */ }
   await fsp.mkdir(checksDir, { recursive: true });
   await fsp.mkdir(workspace, { recursive: true });
 
@@ -98,6 +101,9 @@ async function run(context) {
 
   async function step(name, fn) {
     const started = Date.now();
+    try {
+      await fsp.appendFile(path.join(checksDir, 'selfcheck-trace.txt'), `${new Date().toISOString()} step start: ${name}\n`);
+    } catch { /* diagnostics only */ }
     try {
       const detail = await fn();
       steps.push({ name, ok: true, ms: Date.now() - started, detail: detail || null });
@@ -567,10 +573,13 @@ async function run(context) {
       if (coarenaModels < 10) throw new Error(`Expected >= 10 Coarena models, got ${coarenaModels}`);
       const ollamaModels = await evaluate('window.__caelixState.providers.find(p => p.id === "ollama")?.models?.length || 0');
       if (ollamaModels < 15) throw new Error(`Expected >= 15 Ollama Cloud models, got ${ollamaModels}`);
+      const numesModels = await evaluate('window.__caelixState.providers.find(p => p.id === "numes")?.models?.length || 0');
+      if (numesModels < 6) throw new Error(`Expected >= 6 Numes models, got ${numesModels}`);
       await click('#keys-btn');
       await waitFor('!!document.querySelector("#key-input-groq")', 3000, 'groq key input in Keys modal');
       await waitFor('!!document.querySelector("#key-input-coarena")', 3000, 'coarena key input in Keys modal');
       await waitFor('!!document.querySelector("#key-input-ollama")', 3000, 'ollama key input in Keys modal');
+      await waitFor('!!document.querySelector("#key-input-numes")', 3000, 'numes key input in Keys modal');
       await click('#keys-close');
 
       // Slash commands menu + /help + /btw + /compact

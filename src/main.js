@@ -22,6 +22,18 @@ const APP_NAME = 'CAELIX';
 const ROOT = path.join(__dirname, '..');
 const ICON = path.join(ROOT, 'assets', 'icon-1024.png');
 const SELF_CHECK = process.env.CAELIX_SELFCHECK === '1';
+
+// Startup trace for the self-check: the packaged bundle occasionally stalls
+// before its first paint with no log output anywhere (macOS routes packaged
+// console output to the unified log, which stays empty), so append a marker
+// line per startup milestone to a file instead.
+function trace(message) {
+  if (!SELF_CHECK) return;
+  try {
+    fs.mkdirSync(CHECKS_DIR, { recursive: true });
+    fs.appendFileSync(path.join(CHECKS_DIR, 'selfcheck-trace.txt'), `${new Date().toISOString()} ${message}\n`);
+  } catch { /* diagnostics only */ }
+}
 const CHECKS_DIR = process.env.CAELIX_CHECKS_DIR ? path.resolve(process.env.CAELIX_CHECKS_DIR) : path.join(ROOT, 'checks');
 
 app.setName(APP_NAME);
@@ -195,6 +207,7 @@ function answerQuestion(id, answer) {
 }
 
 function createWindow() {
+  trace('createWindow: building BrowserWindow');
   win = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -216,9 +229,12 @@ function createWindow() {
     },
   });
 
-  win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  win.loadFile(path.join(__dirname, 'renderer', 'index.html'))
+    .then(() => trace('createWindow: loadFile resolved'))
+    .catch((error) => trace(`createWindow: loadFile failed: ${error.message}`));
   browserPanel = new BrowserPanel(win, (event) => emit(event));
   win.once('ready-to-show', () => {
+    trace('createWindow: ready-to-show fired');
     windowReadyMs = Date.now() - PROCESS_STARTED;
     win.show();
     if (SELF_CHECK) {
@@ -754,7 +770,9 @@ function registerIpc() {
 }
 
 async function setup() {
+  trace('setup: entered');
   keys = new KeyStore(userData());
+  trace('setup: keys loaded');
   sessions = new SessionStore(userData());
   sessions.normalizeChatSurfaceCwd(chatRoot());
   settings = new SettingsStore(userData());
@@ -780,6 +798,7 @@ async function setup() {
     fs.mkdirSync(workspace, { recursive: true });
     fs.rmSync(path.join(workspace, 'caelix-note.md'), { force: true });
     settings.set('lastCwd', workspace);
+    trace('setup: selfcheck workspace ready');
   }
 
   app.setAboutPanelOptions({
@@ -794,7 +813,9 @@ async function setup() {
   }
   buildMenu();
   registerIpc();
+  trace('setup: launching window');
   createWindow();
+  trace('setup: createWindow returned');
 }
 
 const gotLock = app.requestSingleInstanceLock();

@@ -145,6 +145,31 @@ const PROVIDERS = {
     defaultModel: 'gpt-oss:120b',
     color: '#f97316',
   },
+  numes: {
+    id: 'numes',
+    name: 'Numes',
+    keyLabel: 'Numes API key',
+    consoleUrl: 'https://numes.ai/dashboard/keys',
+    baseUrl: 'https://api.numes.ai/api/v1/chat/completions',
+    // The provider-documented credential probe: 401 bad, 200 good (balance).
+    probeUrl: 'https://api.numes.ai/api/v1/key',
+    // The provider's published free ($0/token) tool-capable models first.
+    // The dealignai rows are third-party "uncensored" variants Numes itself
+    // lists; they are that provider's models, not something CAELIX curates.
+    // Live Refresh pulls whatever the key can actually serve.
+    models: [
+      'deepseek/deepseek-v4.1-flash',
+      'moonshotai/kimi-k3.1-pro',
+      'nvidia/nemotron-3-ultra-550b-a55b',
+      'dealignai/deepseek-v4.1-flash-uncensored-fp8',
+      'dealignai/glm-5.3-flash-uncensored-fp8',
+      'dealignai/glm-5.3-uncensored-fp8',
+      'anthropic/claude-sonnet-5.5',
+      'anthropic/claude-opus-5.5',
+    ],
+    defaultModel: 'deepseek/deepseek-v4.1-flash',
+    color: '#22d3ee',
+  },
   omniroute: {
     id: 'omniroute',
     name: 'OmniRoute',
@@ -243,6 +268,14 @@ const MODEL_NOTES = {
   'minimax-m3.1-flash': 'Ollama Cloud · 1M context · Vision & tools',
   'nemotron-3-ultra': 'Ollama Cloud · 262k context · Heavy reasoning & tools',
   'gemma4:31b': 'Ollama Cloud · Compact 31B · Vision & tools',
+  'deepseek/deepseek-v4.1-flash': 'Numes · $0/token free tier · Tools · Default',
+  'moonshotai/kimi-k3.1-pro': 'Numes · $0/token free tier · Tools & reasoning',
+  'nvidia/nemotron-3-ultra-550b-a55b': 'Numes · $0/token free tier · 200k context · Heavy reasoning',
+  'dealignai/deepseek-v4.1-flash-uncensored-fp8': 'Numes · $0/token · Third-party uncensored variant (dealignai)',
+  'dealignai/glm-5.3-flash-uncensored-fp8': 'Numes · $0/token · Third-party uncensored variant (dealignai)',
+  'dealignai/glm-5.3-uncensored-fp8': 'Numes · $0/token · Third-party uncensored variant (dealignai)',
+  'anthropic/claude-sonnet-5.5': 'Numes · Paid credits · Tools',
+  'anthropic/claude-opus-5.5': 'Numes · Paid credits · Heaviest',
 };
 
 // Providers whose models carry separate RPM/TPM/RPD quota buckets.
@@ -252,15 +285,17 @@ const MODEL_FAILOVER = {
   openrouter: ['openrouter/free', 'qwen/qwen3-coder:free', 'meta-llama/llama-3.3-70b-instruct:free', 'google/gemma-3-27b-it:free'],
   coarena: ['gpt-6-luna', 'gemini-3-8-flash', 'deepseek-v4-1-flash-1017'],
   ollama: ['gpt-oss:120b', 'kimi-k2.7-code', 'deepseek-v4.1-flash', 'gpt-oss:20b'],
+  numes: ['deepseek/deepseek-v4.1-flash', 'moonshotai/kimi-k3.1-pro', 'nvidia/nemotron-3-ultra-550b-a55b'],
 };
 
 // Order when spilling over across different providers that have saved keys.
-const PROVIDER_SPILLOVER = ['gemini', 'nvidia', 'openrouter', 'ollama', 'groq'];
+const PROVIDER_SPILLOVER = ['gemini', 'nvidia', 'openrouter', 'ollama', 'numes', 'groq'];
 const PROVIDER_HIGH_HEADROOM = {
   gemini: 'gemini-2.5-flash-lite',
   nvidia: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
   openrouter: 'openrouter/free',
   ollama: 'gpt-oss:120b',
+  numes: 'deepseek/deepseek-v4.1-flash',
   groq: 'qwen/qwen3.8-27b',
 };
 
@@ -414,6 +449,17 @@ function friendlyDetail(provider, status, detail) {
     }
     if (status === 429) {
       return `${text ? `${text} — ` : ''}Ollama Cloud rate or usage limit reached. Add another key to rotate, switch models, or wait for reset.`;
+    }
+  }
+  if (provider === 'numes') {
+    if (status === 401) {
+      return 'Numes rejected the API key. Copy or create a key at https://numes.ai/dashboard/keys and save it here in Keys.';
+    }
+    if (status === 402) {
+      return `${text ? `${text} — ` : ''}The prepaid balance behind this Numes key is used up for paid models. Top up at https://numes.ai/dashboard or switch to one of Numes' $0 models (deepseek/deepseek-v4.1-flash, moonshotai/kimi-k3.1-pro, nvidia/nemotron-3-ultra-550b-a55b).`;
+    }
+    if (status === 503) {
+      return `${text ? `${text} — ` : ''}No Numes endpoint could serve this model right now. Pick another tool-capable model in the list, or Refresh the catalog to see what the key can serve.`;
     }
   }
   return text;
@@ -750,6 +796,36 @@ async function testKey(provider, apiKey, model = null) {
       clearTimeout(timer);
     }
   }
+  // Numes documents /key as the credential probe: 401 for a bad key, 200
+  // with the key's balance and usage for a good one. It avoids spending any
+  // inference on a test.
+  if (provider === 'numes') {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const response = await fetch(meta.probeUrl || 'https://api.numes.ai/api/v1/key', {
+        headers: { authorization: `Bearer ${apiKey}` },
+        signal: controller.signal,
+      });
+      if (!response.ok) throw await readError(response, provider);
+      let budget = '';
+      try {
+        const data = await response.json();
+        const remaining = data?.remaining ?? data?.balance_remaining ?? data?.credits_remaining;
+        if (Number.isFinite(Number(remaining))) budget = ` — remaining balance ${Number(remaining)}`;
+      } catch { /* balance display is best-effort */ }
+      return { ok: true, model: `key${budget}` };
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        const err = new Error('Numes did not answer within 10s during key test.');
+        err.status = 408;
+        throw err;
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
   const targetModel = model || meta.defaultModel;
   const candidates = provider === 'nvidia'
     ? [...new Set([targetModel, ...NVIDIA_TEST_FALLBACKS])]
@@ -787,6 +863,8 @@ const MODELS_ENDPOINTS = {
   coarena: 'https://coarena.ai/api/v1/models',
   ollama: 'https://ollama.com/v1/models',
   omniroute: 'http://localhost:20128/v1/models',
+  // Tool-capable text models, cheapest first — free $0 rows sort to the top.
+  numes: 'https://api.numes.ai/api/v1/models?output_modalities=text&supported_parameters=tools&sort=pricing-low-to-high',
 };
 
 const MODEL_EXCLUDES = {
@@ -799,7 +877,7 @@ async function fetchProviderModels(provider, apiKey) {
   const meta = PROVIDERS[provider];
   if (!meta) throw new Error(`Unknown provider: ${provider}`);
   if (meta.keyless) return meta.models;
-  if ((provider === 'gemini' || provider === 'groq' || provider === 'omniroute') && !apiKey) {
+  if ((provider === 'gemini' || provider === 'groq' || provider === 'omniroute' || provider === 'numes') && !apiKey) {
     throw new Error(`Add ${/^[AEIOU]/.test(meta.name) ? 'an' : 'a'} ${meta.name} key first to refresh models.`);
   }
   const controller = new AbortController();
@@ -855,6 +933,6 @@ async function fetchProviderModels(provider, apiKey) {
 }
 
 module.exports = {
-  PROVIDERS, MODEL_NOTES, MODEL_FAILOVER, PROVIDER_SPILLOVER, PROVIDER_HIGH_HEADROOM,
+  PROVIDERS, MODEL_NOTES, MODEL_FAILOVER, PROVIDER_SPILLOVER, PROVIDER_HIGH_HEADROOM, MODELS_ENDPOINTS,
   providerList, streamOpenAICompatible, testKey, fetchProviderModels, readError,
 };

@@ -6,6 +6,42 @@ const os = require('os');
 const crypto = require('crypto');
 const { safeStorage } = require('electron');
 
+// The self-check profile is throwaway and never holds a real key, but the
+// packaged bundle is ad-hoc signed, so every rebuild gets a new code hash and
+// macOS shows a keychain access prompt that blocks the run until a human
+// types the login password. Self-check runs therefore switch to a locally
+// generated key file (chmod 600) so automated checks stay prompt-free. The
+// real profile (CAELIX_SELFCHECK unset) always uses the OS keychain.
+const PLAIN_KEYS = process.env.CAELIX_SELFCHECK === '1';
+
+function localKeyFile(dir) {
+  const file = path.join(dir, 'keys.local-key');
+  if (!fs.existsSync(file)) {
+    fs.writeFileSync(file, crypto.randomBytes(32), { mode: 0o600 });
+  }
+  return file;
+}
+
+function plainEncrypt(dir, text) {
+  const key = fs.readFileSync(localKeyFile(dir));
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const enc = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
+  return Buffer.concat([Buffer.from('cxplain1'), iv, cipher.getAuthTag(), enc]);
+}
+
+function plainDecrypt(dir, buffer) {
+  const data = Buffer.from(buffer);
+  if (data.subarray(0, 9).toString() !== 'cxplain1') throw new Error('Unknown local key format.');
+  const iv = data.subarray(9, 21);
+  const tag = data.subarray(21, 37);
+  const enc = data.subarray(37);
+  const key = fs.readFileSync(localKeyFile(dir));
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(enc), decipher.final()]).toString('utf8');
+}
+
 function atomicWrite(file, data, mode) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
@@ -32,6 +68,10 @@ class KeyStore {
   load() {
     try {
       if (!fs.existsSync(this.file)) return;
+      if (PLAIN_KEYS) {
+        this.keys = JSON.parse(plainDecrypt(path.dirname(this.file), fs.readFileSync(this.file)));
+        return;
+      }
       if (!safeStorage.isEncryptionAvailable()) throw new Error('OS encryption is not available');
       const raw = safeStorage.decryptString(fs.readFileSync(this.file));
       this.keys = JSON.parse(raw);
@@ -42,6 +82,10 @@ class KeyStore {
   }
 
   persist() {
+    if (PLAIN_KEYS) {
+      atomicWrite(this.file, plainEncrypt(path.dirname(this.file), JSON.stringify(this.keys)), 0o600);
+      return;
+    }
     if (!safeStorage.isEncryptionAvailable()) {
       throw new Error('The macOS keychain is unavailable, so CAELIX will not store keys.');
     }

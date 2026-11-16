@@ -15,6 +15,7 @@ const KEY_ENV = {
   groq: ['GROQ_API_KEY'],
   coarena: ['COARENA_API_KEY'],
   ollama: ['OLLAMA_API_KEY'],
+  numes: ['NUMES_API_KEY'],
 };
 
 function check(name, ok, detail) {

@@ -102,10 +102,29 @@ function main() {
     license: pkg.license,
   }, null, 2));
 
-  try {
-    run('codesign', ['--force', '--sign', '-', '--identifier', 'app.caelix.desktop', APP]);
-  } catch {
-    console.warn('Ad-hoc signing failed; the bundle may still run from this Mac.');
+  // Sign with the stable local "CAELIX Local" identity. An ad-hoc signature
+  // changes the code hash on every build, so macOS asks for the keychain
+  // password again after each rebuild before CAELIX can read "CAELIX Safe
+  // Storage". A stable identity keeps one keychain ACL entry valid forever:
+  // the user approves it once, and no rebuild ever prompts again. The signing
+  // key lives in ~/Library/Keychains/caelix-signing.keychain.
+  const signingKeychain = path.join(os.homedir(), 'Library', 'Keychains', 'caelix-signing.keychain-db');
+  let signed = false;
+  if (fs.existsSync(signingKeychain)) {
+    try {
+      run('security', ['unlock-keychain', '-p', 'cx-sign-local', signingKeychain]);
+      run('codesign', ['--force', '--deep', '--sign', 'CAELIX Local', '--identifier', 'app.caelix.desktop', APP]);
+      signed = true;
+    } catch (error) {
+      console.warn(`Stable signing failed (${error.message.split('\n')[0]}); falling back to ad-hoc.`);
+    }
+  }
+  if (!signed) {
+    try {
+      run('codesign', ['--force', '--sign', '-', '--identifier', 'app.caelix.desktop', APP]);
+    } catch {
+      console.warn('Ad-hoc signing failed; the bundle may still run from this Mac.');
+    }
   }
 
   const shortcut = skipShortcut ? null : createShortcut(APP);
