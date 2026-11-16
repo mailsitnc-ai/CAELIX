@@ -534,7 +534,7 @@ function registerIpc() {
       cwd: surface === 'chat' ? chatRoot() : codeDir,
       surface,
       provider: input.provider || (SELF_CHECK ? 'simulator' : 'gemini'),
-      model: input.model || (SELF_CHECK ? 'sim-1' : 'gemini-2.5-flash'),
+      model: input.model || (SELF_CHECK ? 'sim-1' : 'gemini-3-flash-preview'),
       mode: input.mode || 'ask',
     });
     emit({ type: 'session-created', session: sessionSummary(session) });

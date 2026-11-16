@@ -7,8 +7,16 @@ const PROVIDERS = {
     keyLabel: 'Gemini API key',
     consoleUrl: 'https://aistudio.google.com/apikey',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
-    models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'],
-    defaultModel: 'gemini-2.5-flash',
+    models: [
+      'gemini-3-flash-preview',
+      'gemini-3.5-flash-lite',
+      'gemini-3.1-flash-lite',
+      'gemini-3.1-flash-lite-preview',
+      'gemini-flash-lite-latest',
+      'gemini-4-hydrogen',
+      'gemma-4-31b-it',
+    ],
+    defaultModel: 'gemini-3-flash-preview',
     color: '#4285f4',
   },
   openrouter: {
@@ -19,14 +27,23 @@ const PROVIDERS = {
     baseUrl: 'https://openrouter.ai/api/v1/chat/completions',
     models: [
       'openrouter/free',
-      'qwen/qwen3-coder:free',
-      'meta-llama/llama-3.3-70b-instruct:free',
-      'google/gemma-3-27b-it:free',
-      'google/gemini-2.5-flash',
-      'google/gemini-2.5-pro',
-      'deepseek/deepseek-chat',
-      'openai/gpt-5-mini',
-      'openai/gpt-5',
+      'nvidia/nemotron-3-ultra-550b-a55b:free',
+      'nvidia/nemotron-3.5-super-vl:free',
+      'nvidia/nemotron-3.5-lightning:free',
+      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+      'cohere/north-mini-code:free',
+      'baidu/ernie-5.5-flash-preview:free',
+      'particle-ai/particle-1:free',
+      'dots-studio/dots-3-note-preview:free',
+      'recursive/flint-v1.0:free',
+      'google/gemma-4-31b-it:free',
+      'google/gemma-4-26b-a4b-it:free',
+      'liquid/lfm-3-1.7b:free',
+      'anthropic/claude-opus-5.5',
+      'anthropic/claude-sonnet-5.5',
+      'anthropic/claude-haiku-5.5',
+      'anthropic/claude-sonnet-4.6',
+      'anthropic/claude-opus-4.6',
     ],
     defaultModel: 'openrouter/free',
     color: '#8b5cf6',
@@ -38,44 +55,13 @@ const PROVIDERS = {
     consoleUrl: 'https://build.nvidia.com/',
     baseUrl: 'https://integrate.api.nvidia.com/v1/chat/completions',
     models: [
-      // Verified live against a real NIM key on 2026-11-15 (probe: OK twice each).
       'nvidia/nemotron-3.5-lightning-30b-a3b',
       'nvidia/nemotron-3.5-super-vl-120b-a12b',
       'nvidia/nemotron-3-ultra-550b-a55b',
-      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
-      'mistralai/mistral-large-4-1t-a52b',
-      'minimaxai/minimax-m3.1-flash',
-      // Catalog entries that 404 or hang on some accounts; kept for accounts that have them.
-      'deepseek-ai/deepseek-v4.1-flash',
-      'nvidia/nemotron-3-super-120b-a12b',
-      'nvidia/nemotron-nano-3-30b-a3b',
-      'nvidia/llama-3.1-nemotron-ultra-253b-v1',
-      'nvidia/llama-3.1-nemotron-70b-instruct',
-      'nvidia/llama-3.1-nemotron-51b-instruct',
-      'nvidia/nemotron-4-340b-instruct',
-      'mistralai/mistral-large-2-instruct',
-      'mistralai/codestral-22b-instruct-v0.1',
-      'mistralai/mistral-7b-instruct-v0.3',
-      'mistralai/mixtral-8x22b-v0.1',
-      'nv-mistralai/mistral-nemo-12b-instruct',
-      'moonshotai/kimi-k2.6',
-      'z-ai/glm-5.3-flash',
-      'stepfun-ai/step-5-preview',
-      'openai/gpt-oss-20b',
-      'google/gemma-4-31b-it',
-      'google/gemma-3-12b-it',
-      'google/gemma-3-4b-it',
-      'meta/llama-3.2-90b-vision-instruct',
-      'meta/codellama-70b',
       'poolside/laguna-xs-2.1',
-      '01-ai/yi-large',
-      'microsoft/phi-3.5-moe-instruct',
-      'microsoft/phi-3-vision-128k-instruct',
-      'ibm/granite-34b-code-instruct',
-      'ibm/granite-3.0-8b-instruct',
-      'bigcode/starcoder2-15b',
-      'databricks/dbrx-instruct',
-      'ai21labs/jamba-1.5-large-instruct',
+      'mistralai/mistral-large-4-1t-a52b',
+      'nvidia/nemotron-3.5-bolt-e4b',
+      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
     ],
     defaultModel: 'nvidia/nemotron-3.5-lightning-30b-a3b',
     color: '#76b900',
@@ -86,8 +72,6 @@ const PROVIDERS = {
     keyLabel: 'Groq API key',
     consoleUrl: 'https://console.groq.com/keys',
     baseUrl: 'https://api.groq.com/openai/v1/chat/completions',
-    // Verified live against a real Groq key on 2026-11-15 (probe: OK, 79-316 ms).
-    // Groq rotated its catalog: the llama-4/llama-3.3 IDs no longer exist.
     models: [
       'openai/gpt-oss-20b',
       'qwen/qwen3.8-27b',
@@ -107,43 +91,15 @@ const PROVIDERS = {
       'gpt-6-luna',
       'gemini-3-8-flash',
       'deepseek-v4-1-flash-1017',
-      'gpt-6-1-sol',
-      'gpt-6-1-terra',
-      'gpt-6-astra',
-      'gemini-4-carbon',
-      'gemini-4-argon',
-      'grok-4-7',
-      'kimi-k3-1-pro',
+      'claude-opus-5-5',
+      'claude-sonnet-5-5',
+      'claude-haiku-5-5',
+      'claude-fable-5-2',
+      'claude-fable-5-1',
+      'claude-fable-5',
     ],
     defaultModel: 'gpt-6-luna',
     color: '#06b6d4',
-  },
-  ollama: {
-    id: 'ollama',
-    name: 'Ollama Cloud',
-    keyLabel: 'Ollama API key',
-    consoleUrl: 'https://ollama.com/settings/keys',
-    baseUrl: 'https://ollama.com/v1/chat/completions',
-    models: [
-      'gpt-oss:120b',
-      'gpt-oss:20b',
-      'kimi-k2.7-code',
-      'deepseek-v4.1-flash',
-      'deepseek-v4-pro:0813',
-      'kimi-k3.1-pro',
-      'glm-5.3',
-      'glm-5.3-flash',
-      'mistral-large-4',
-      'minimax-m3.1-flash',
-      'nemotron-3-ultra',
-      'nemotron-3-super',
-      'gemma4:31b',
-      'mimo-v2.6-pro',
-      'mimo-v2.6-flash',
-      'muse-spark-open',
-    ],
-    defaultModel: 'gpt-oss:120b',
-    color: '#f97316',
   },
   numes: {
     id: 'numes',
@@ -151,21 +107,18 @@ const PROVIDERS = {
     keyLabel: 'Numes API key',
     consoleUrl: 'https://numes.ai/dashboard/keys',
     baseUrl: 'https://api.numes.ai/api/v1/chat/completions',
-    // The provider-documented credential probe: 401 bad, 200 good (balance).
     probeUrl: 'https://api.numes.ai/api/v1/key',
-    // The provider's published free ($0/token) tool-capable models first.
-    // The dealignai rows are third-party "uncensored" variants Numes itself
-    // lists; they are that provider's models, not something CAELIX curates.
-    // Live Refresh pulls whatever the key can actually serve.
     models: [
       'deepseek/deepseek-v4.1-flash',
       'moonshotai/kimi-k3.1-pro',
-      'nvidia/nemotron-3-ultra-550b-a55b',
+      'z-ai/glm-5.3',
       'dealignai/deepseek-v4.1-flash-uncensored-fp8',
       'dealignai/glm-5.3-flash-uncensored-fp8',
       'dealignai/glm-5.3-uncensored-fp8',
-      'anthropic/claude-sonnet-5.5',
       'anthropic/claude-opus-5.5',
+      'anthropic/claude-sonnet-5.5',
+      'anthropic/claude-haiku-5.5',
+      'anthropic/claude-fable-5.2',
     ],
     defaultModel: 'deepseek/deepseek-v4.1-flash',
     color: '#22d3ee',
@@ -215,16 +168,14 @@ const PROVIDERS = {
 };
 
 const MODEL_NOTES = {
-  'gemini-2.5-flash-lite': 'Best for limits · Highest RPM/RPD · 1M context',
-  'gemini-2.5-flash': 'Lightweight · High headroom · 1M context',
-  'gemini-2.0-flash': 'Separate Gemini quota · 1M context',
-  'gemini-2.5-pro': 'Heavy · Lower RPM/RPD · 1M context',
-  'llama-3.1-8b-instant': 'Rotated out of Groq · Not on current keys',
-  'meta-llama/llama-4-scout-17b-16e-instruct': 'Rotated out of Groq · Not on current keys',
-  'llama-3.3-70b-versatile': 'Rotated out of Groq · Not on current keys',
+  'gemini-3-flash-preview': 'Verified free · Fast tools & reasoning',
+  'gemini-3.5-flash-lite': 'Verified free · Fastest RPM/RPD · Tools',
+  'gemini-3.1-flash-lite': 'Verified free · Lightweight · Tools',
+  'gemini-3.1-flash-lite-preview': 'Verified free · Preview lite · Tools',
+  'gemini-flash-lite-latest': 'Verified free · Always latest lite · Tools',
+  'gemini-4-hydrogen': 'Verified free · Flagship Gemini 4 Hydrogen · Tools',
+  'gemma-4-31b-it': 'Verified free · Gemma 4 31B on Google AI Studio',
   'qwen/qwen3.8-27b': 'Fastest verified · High headroom · Separate Groq bucket',
-  'qwen/qwen3-32b': 'Rotated out of Groq · Not on current keys',
-  'moonshotai/kimi-k2-instruct': 'Rotated out of Groq · Not on current keys',
   'openai/gpt-oss-120b': 'Heavy · Eats free TPM quickly',
   'openai/gpt-oss-20b': 'Fast tool caller · Good free TPM',
   'allam-2-7b': 'Lightweight fallback · Verified live',
@@ -233,68 +184,64 @@ const MODEL_NOTES = {
   'auto/fast': 'OmniRoute · Speed objective',
   'auto/cheap': 'OmniRoute · Cheapest eligible first',
   'auto/smart': 'OmniRoute · Quality objective',
-  'deepseek-ai/deepseek-v4.1-flash': 'Hangs on many accounts · Key test moves on after it stalls',
-  'nvidia/llama-3.1-nemotron-70b-instruct': '40 RPM · Not on all NIM accounts',
-  'nvidia/nemotron-3.5-lightning-30b-a3b': '40 RPM · Verified live · Lightweight & fast',
-  'nvidia/nemotron-3.5-super-vl-120b-a12b': '40 RPM · Verified live · Strong coder',
-  'nvidia/nemotron-3-ultra-550b-a55b': '40 RPM · Verified live · Largest NIM model',
-  'mistralai/mistral-large-4-1t-a52b': '40 RPM · Verified live · Large Mistral',
-  'minimaxai/minimax-m3.1-flash': '40 RPM · Verified live · Fast fallback',
-  'nvidia/nemotron-nano-3-30b-a3b': '40 RPM · Lightweight & fast',
-  'mistralai/codestral-22b-instruct-v0.1': '40 RPM · Fast compact coder',
-  'openrouter/free': 'Free router · Does not spend credits',
-  'qwen/qwen3-coder:free': 'Free coding · Separate bucket',
-  'meta-llama/llama-3.3-70b-instruct:free': 'Free · Strong general & code',
-  'google/gemma-3-27b-it:free': 'Free · Fast lightweight backup',
-  'google/gemini-2.5-flash': 'Paid credits · Lightweight · 1M context',
+  'nvidia/nemotron-3.5-lightning-30b-a3b': '40 RPM · Verified live · Lightweight & fast tools',
+  'nvidia/nemotron-3.5-super-vl-120b-a12b': '40 RPM · Verified live · Strong coder & tools',
+  'nvidia/nemotron-3-ultra-550b-a55b': '40 RPM · Verified live · Largest NIM model & tools',
+  'poolside/laguna-xs-2.1': '40 RPM · Verified live · Fast coder & tools',
+  'mistralai/mistral-large-4-1t-a52b': '40 RPM · Verified live · Large Mistral & tools',
+  'nvidia/nemotron-3.5-bolt-e4b': '40 RPM · Verified live · Ultra-fast tools',
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning': '40 RPM · Verified live · Compact reasoning',
+  'openrouter/free': 'Free router · Verified live · Tools',
+  'nvidia/nemotron-3-ultra-550b-a55b:free': 'Free · Verified live · 1M context · Tools',
+  'nvidia/nemotron-3.5-super-vl:free': 'Free · Verified live · 1M context · Vision & tools',
+  'nvidia/nemotron-3.5-lightning:free': 'Free · Verified live · 1M context · Fast tools',
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free': 'Free · Verified live · 256k · Fast reasoning',
+  'cohere/north-mini-code:free': 'Free · Verified live · 256k coding specialist',
+  'baidu/ernie-5.5-flash-preview:free': 'Free · Verified live · 1M context · Tools',
+  'particle-ai/particle-1:free': 'Free · Verified live · 1M context · Tools',
+  'dots-studio/dots-3-note-preview:free': 'Free · Verified live · 512k context · Tools',
+  'recursive/flint-v1.0:free': 'Free · Verified live · 262k context · Tools',
+  'google/gemma-4-31b-it:free': 'Free · Verified live · 262k · Tools',
+  'google/gemma-4-26b-a4b-it:free': 'Free · Verified live · 262k · Fast MoE',
+  'liquid/lfm-3-1.7b:free': 'Free · Verified live · 262k · Compact tools',
+  'anthropic/claude-opus-5.5': 'Claude · Paid credits · Flagship Opus',
+  'anthropic/claude-sonnet-5.5': 'Claude · Paid credits · Sonnet 5.5',
+  'anthropic/claude-haiku-5.5': 'Claude · Paid credits · Fast Haiku 5.5',
+  'anthropic/claude-sonnet-4.6': 'Claude · Paid credits · Sonnet 4.6',
+  'anthropic/claude-opus-4.6': 'Claude · Paid credits · Opus 4.6',
   'gpt-6-luna': 'Free tier · Coarena · OpenAI · 128k · Vision & tools',
   'gemini-3-8-flash': 'Free tier · Coarena · Google · 128k · Fast vision & tools',
   'deepseek-v4-1-flash-1017': 'Free tier · Coarena · DeepSeek · 128k · Tools & reasoning',
-  'gpt-6-1-sol': 'Paid credits · Coarena · OpenAI · 128k · Vision & tools',
-  'gpt-6-1-terra': 'Paid credits · Coarena · OpenAI · 128k · Vision & tools',
-  'gpt-6-astra': 'Paid credits · Coarena · OpenAI · 128k · Vision & tools',
-  'gemini-4-carbon': 'Paid credits · Coarena · Google · 128k · Vision & tools',
-  'gemini-4-argon': 'Paid credits · Coarena · Google · 128k · Vision & tools',
-  'grok-4-7': 'Paid credits · Coarena · xAI · 128k · Vision & tools',
-  'kimi-k3-1-pro': 'Paid credits · Coarena · Moonshot · 128k · Vision & tools',
-  'gpt-oss:120b': 'Ollama Cloud · OpenAI open-weight 120B · Tools & thinking',
-  'gpt-oss:20b': 'Ollama Cloud · Fast 20B · Tools & thinking',
-  'kimi-k2.7-code': 'Ollama Cloud · Coding specialist · Vision & tools',
-  'deepseek-v4.1-flash': 'Ollama Cloud · Fast reasoning & tools',
-  'deepseek-v4-pro:0813': 'Ollama Cloud · Heavy reasoning & tools',
-  'glm-5.3': 'Ollama Cloud · Flagship GLM · Tools & thinking',
-  'glm-5.3-flash': 'Ollama Cloud · Fast GLM · Vision & tools',
-  'mistral-large-4': 'Ollama Cloud · 1M context · Vision & tools',
-  'minimax-m3.1-flash': 'Ollama Cloud · 1M context · Vision & tools',
-  'nemotron-3-ultra': 'Ollama Cloud · 262k context · Heavy reasoning & tools',
-  'gemma4:31b': 'Ollama Cloud · Compact 31B · Vision & tools',
-  'deepseek/deepseek-v4.1-flash': 'Numes · $0/token free tier · Tools · Default',
-  'moonshotai/kimi-k3.1-pro': 'Numes · $0/token free tier · Tools & reasoning',
-  'nvidia/nemotron-3-ultra-550b-a55b': 'Numes · $0/token free tier · 200k context · Heavy reasoning',
-  'dealignai/deepseek-v4.1-flash-uncensored-fp8': 'Numes · $0/token · Third-party uncensored variant (dealignai)',
-  'dealignai/glm-5.3-flash-uncensored-fp8': 'Numes · $0/token · Third-party uncensored variant (dealignai)',
-  'dealignai/glm-5.3-uncensored-fp8': 'Numes · $0/token · Third-party uncensored variant (dealignai)',
-  'anthropic/claude-sonnet-5.5': 'Numes · Paid credits · Tools',
-  'anthropic/claude-opus-5.5': 'Numes · Paid credits · Heaviest',
+  'claude-opus-5-5': 'Claude · Coarena credits · 128k · Opus 5.5',
+  'claude-sonnet-5-5': 'Claude · Coarena credits · 128k · Sonnet 5.5',
+  'claude-haiku-5-5': 'Claude · Coarena credits · 128k · Haiku 5.5',
+  'claude-fable-5-2': 'Claude · Coarena credits · 128k · Fable 5.2',
+  'claude-fable-5-1': 'Claude · Coarena credits · 128k · Fable 5.1',
+  'claude-fable-5': 'Claude · Coarena credits · 128k · Fable 5',
+  'deepseek/deepseek-v4.1-flash': 'Numes · $0/token free tier · 1M · Tools · Default',
+  'moonshotai/kimi-k3.1-pro': 'Numes · $0/token free tier · 1M · Tools & reasoning',
+  'z-ai/glm-5.3': 'Numes · $0/token free tier · 262k · Flagship GLM · Tools',
+  'dealignai/deepseek-v4.1-flash-uncensored-fp8': 'Numes · $0/token · Third-party uncensored variant',
+  'dealignai/glm-5.3-flash-uncensored-fp8': 'Numes · $0/token · Third-party uncensored variant',
+  'dealignai/glm-5.3-uncensored-fp8': 'Numes · $0/token · Third-party uncensored variant',
+  'anthropic/claude-fable-5.2': 'Claude · Paid credits · Fable 5.2',
 };
 
 // Providers whose models carry separate RPM/TPM/RPD quota buckets.
 const MODEL_FAILOVER = {
-  gemini: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'],
+  gemini: ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-flash-lite-latest', 'gemini-3-flash-preview', 'gemini-4-hydrogen'],
   groq: ['openai/gpt-oss-20b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-120b'],
-  openrouter: ['openrouter/free', 'qwen/qwen3-coder:free', 'meta-llama/llama-3.3-70b-instruct:free', 'google/gemma-3-27b-it:free'],
+  openrouter: ['openrouter/free', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'nvidia/nemotron-3.5-super-vl:free', 'nvidia/nemotron-3.5-lightning:free', 'baidu/ernie-5.5-flash-preview:free'],
   coarena: ['gpt-6-luna', 'gemini-3-8-flash', 'deepseek-v4-1-flash-1017'],
-  ollama: ['gpt-oss:120b', 'kimi-k2.7-code', 'deepseek-v4.1-flash', 'gpt-oss:20b'],
-  numes: ['deepseek/deepseek-v4.1-flash', 'moonshotai/kimi-k3.1-pro', 'nvidia/nemotron-3-ultra-550b-a55b'],
+  numes: ['deepseek/deepseek-v4.1-flash', 'moonshotai/kimi-k3.1-pro', 'z-ai/glm-5.3'],
 };
 
 // Order when spilling over across different providers that have saved keys.
-const PROVIDER_SPILLOVER = ['gemini', 'nvidia', 'openrouter', 'ollama', 'numes', 'groq'];
+const PROVIDER_SPILLOVER = ['gemini', 'nvidia', 'openrouter', 'numes', 'groq'];
 const PROVIDER_HIGH_HEADROOM = {
-  gemini: 'gemini-2.5-flash-lite',
+  gemini: 'gemini-3.5-flash-lite',
   nvidia: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
   openrouter: 'openrouter/free',
-  ollama: 'gpt-oss:120b',
   numes: 'deepseek/deepseek-v4.1-flash',
   groq: 'qwen/qwen3.8-27b',
 };
@@ -443,20 +390,12 @@ function friendlyDetail(provider, status, detail) {
       return `${text ? `${text} — ` : ''}Coarena daily free limit or rate limit reached. Request a higher limit in Coarena or switch models/providers.`;
     }
   }
-  if (provider === 'ollama') {
-    if (status === 401) {
-      return 'Ollama Cloud rejected the API key. Copy or create a key at https://ollama.com/settings/keys and save it here in Keys.';
-    }
-    if (status === 429) {
-      return `${text ? `${text} — ` : ''}Ollama Cloud rate or usage limit reached. Add another key to rotate, switch models, or wait for reset.`;
-    }
-  }
   if (provider === 'numes') {
     if (status === 401) {
       return 'Numes rejected the API key. Copy or create a key at https://numes.ai/dashboard/keys and save it here in Keys.';
     }
     if (status === 402) {
-      return `${text ? `${text} — ` : ''}The prepaid balance behind this Numes key is used up for paid models. Top up at https://numes.ai/dashboard or switch to one of Numes' $0 models (deepseek/deepseek-v4.1-flash, moonshotai/kimi-k3.1-pro, nvidia/nemotron-3-ultra-550b-a55b).`;
+      return `${text ? `${text} — ` : ''}This Claude or paid Numes model requires credits. Top up at https://numes.ai/dashboard or switch to one of Numes' $0 models (deepseek/deepseek-v4.1-flash, moonshotai/kimi-k3.1-pro, z-ai/glm-5.3).`;
     }
     if (status === 503) {
       return `${text ? `${text} — ` : ''}No Numes endpoint could serve this model right now. Pick another tool-capable model in the list, or Refresh the catalog to see what the key can serve.`;
@@ -704,21 +643,30 @@ const NVIDIA_TEST_FALLBACKS = [
   'nvidia/nemotron-3.5-lightning-30b-a3b',
   'nvidia/nemotron-3.5-super-vl-120b-a12b',
   'nvidia/nemotron-3-ultra-550b-a55b',
-  'minimaxai/minimax-m3.1-flash',
+  'poolside/laguna-xs-2.1',
   'mistralai/mistral-large-4-1t-a52b',
+  'nvidia/nemotron-3.5-bolt-e4b',
+];
+
+const GEMINI_TEST_FALLBACKS = [
+  'gemini-3-flash-preview',
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
+  'gemini-flash-lite-latest',
+  'gemini-4-hydrogen',
+];
+
+const OPENROUTER_TEST_FALLBACKS = [
+  'openrouter/free',
+  'nvidia/nemotron-3-ultra-550b-a55b:free',
+  'nvidia/nemotron-3.5-super-vl:free',
+  'baidu/ernie-5.5-flash-preview:free',
 ];
 
 const COARENA_TEST_FALLBACKS = [
   'gpt-6-luna',
   'gemini-3-8-flash',
   'deepseek-v4-1-flash-1017',
-];
-
-const OLLAMA_TEST_FALLBACKS = [
-  'gpt-oss:120b',
-  'gpt-oss:20b',
-  'kimi-k2.7-code',
-  'gemma4:31b',
 ];
 
 async function probeModel(meta, provider, apiKey, targetModel) {
@@ -829,11 +777,13 @@ async function testKey(provider, apiKey, model = null) {
   const targetModel = model || meta.defaultModel;
   const candidates = provider === 'nvidia'
     ? [...new Set([targetModel, ...NVIDIA_TEST_FALLBACKS])]
-    : provider === 'coarena'
-      ? [...new Set([targetModel, ...COARENA_TEST_FALLBACKS])]
-      : provider === 'ollama'
-        ? [...new Set([targetModel, ...OLLAMA_TEST_FALLBACKS])]
-        : [targetModel];
+    : provider === 'gemini'
+      ? [...new Set([targetModel, ...GEMINI_TEST_FALLBACKS])]
+      : provider === 'openrouter'
+        ? [...new Set([targetModel, ...OPENROUTER_TEST_FALLBACKS])]
+        : provider === 'coarena'
+          ? [...new Set([targetModel, ...COARENA_TEST_FALLBACKS])]
+          : [targetModel];
   let lastError = null;
   for (const candidate of candidates) {
     try {
@@ -861,17 +811,50 @@ const MODELS_ENDPOINTS = {
   nvidia: 'https://integrate.api.nvidia.com/v1/models',
   groq: 'https://api.groq.com/openai/v1/models',
   coarena: 'https://coarena.ai/api/v1/models',
-  ollama: 'https://ollama.com/v1/models',
   omniroute: 'http://localhost:20128/v1/models',
   // Tool-capable text models, cheapest first — free $0 rows sort to the top.
   numes: 'https://api.numes.ai/api/v1/models?output_modalities=text&supported_parameters=tools&sort=pricing-low-to-high',
 };
 
 const MODEL_EXCLUDES = {
-  nvidia: /(embed|rerank|guard|safety|topic-control|nvclip|deplot|parse|synthetic-video|cosmos-reason|reward)/i,
+  nvidia: /(embed|rerank|guard|safety|topic-control|nvclip|deplot|parse|synthetic-video|cosmos-reason|reward|ising-calibration|riva-translate)/i,
   groq: /(whisper|orpheus|guard|safeguard|tts|playai)/i,
-  ollama: /^(clef:|embed|rerank)/i,
 };
+
+function isClaudeId(id) {
+  return /^(anthropic\/)?claude-/i.test(String(id || '')) && !/:batch$/i.test(String(id || ''));
+}
+
+function isZeroPriceRow(item) {
+  if (!item?.pricing || typeof item.pricing !== 'object') return false;
+  const prompt = Number(item.pricing.prompt);
+  const completion = Number(item.pricing.completion);
+  return Number.isFinite(prompt) && prompt === 0 && (!Number.isFinite(completion) || completion === 0);
+}
+
+function filterLiveProviderRow(provider, item) {
+  const id = String(item?.id || '');
+  if (!id) return false;
+  if (provider === 'openrouter') {
+    if (isClaudeId(id)) return true;
+    if (/inkling-2-small:free|lyria/i.test(id)) return false;
+    const isFree = id === 'openrouter/free' || id.endsWith(':free') || isZeroPriceRow(item);
+    if (!isFree) return false;
+    if (Array.isArray(item?.supported_parameters) && !item.supported_parameters.includes('tools')) return false;
+    return true;
+  }
+  if (provider === 'coarena') {
+    if (item?.lifecycle && item.lifecycle !== 'active') return false;
+    return COARENA_TEST_FALLBACKS.includes(id) || isClaudeId(id);
+  }
+  if (provider === 'numes') {
+    if (isClaudeId(id)) return true;
+    if (/kimi-k3-abliterated/i.test(id)) return false;
+    if (!item?.pricing) return true; // Allows mock unit-test catalogs without pricing fields
+    return isZeroPriceRow(item);
+  }
+  return true;
+}
 
 async function fetchProviderModels(provider, apiKey) {
   const meta = PROVIDERS[provider];
@@ -893,7 +876,7 @@ async function fetchProviderModels(provider, apiKey) {
       const ids = (data.models || [])
         .filter((item) => Array.isArray(item.supportedGenerationMethods) && item.supportedGenerationMethods.includes('generateContent'))
         .map((item) => String(item.name || '').replace(/^models\//, ''))
-        .filter((id) => id && !id.includes('embedding') && !id.includes('imagen'));
+        .filter((id) => id && !/(embedding|imagen|tts|native-audio|aqa|robotics|computer-use|lyria|deep-research|antigravity|^gemini-2\.)/i.test(id));
       return ids.length ? [...new Set([...meta.models, ...ids])].slice(0, 120) : meta.models;
     }
     const url = MODELS_ENDPOINTS[provider];
@@ -913,18 +896,16 @@ async function fetchProviderModels(provider, apiKey) {
     const data = await response.json();
     const exclude = MODEL_EXCLUDES[provider];
     const rows = Array.isArray(data.data) ? data.data : [];
-    const activeRows = provider === 'coarena'
-      ? rows.filter((item) => !item.lifecycle || item.lifecycle === 'active')
-      : rows;
-    const ids = activeRows
+    const ids = rows
+      .filter((item) => filterLiveProviderRow(provider, item))
       .map((item) => item.id)
       .filter((id) => Boolean(id) && (!exclude || !exclude.test(id)));
     if (!ids.length) return meta.models;
     if (provider === 'coarena') {
       const freeSet = new Set(COARENA_TEST_FALLBACKS);
       const freeFirst = COARENA_TEST_FALLBACKS.filter((id) => ids.includes(id));
-      const rest = ids.filter((id) => !freeSet.has(id));
-      return [...freeFirst, ...rest].slice(0, 400);
+      const claudeRest = ids.filter((id) => !freeSet.has(id) && isClaudeId(id));
+      return [...new Set([...freeFirst, ...claudeRest])].slice(0, 400);
     }
     return [...new Set([...meta.models, ...ids])].slice(0, 400);
   } finally {

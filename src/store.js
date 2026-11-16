@@ -259,7 +259,7 @@ class SessionStore {
       cwd: input.cwd || os.homedir(),
       surface: input.surface === 'chat' ? 'chat' : (input.surface === 'code' ? 'code' : null),
       provider: input.provider || 'gemini',
-      model: input.model || 'gemini-2.5-flash',
+      model: input.model || 'gemini-3-flash-preview',
       mode: input.mode || 'ask',
       contextOffset: 0,
       messages: [],

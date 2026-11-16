@@ -535,11 +535,15 @@ class Engine {
   contextLimit(session) {
     const provider = session?.provider;
     if (provider === 'coarena') return 128000;
-    if (provider === 'ollama') return 262144;
     if (provider === 'groq') return 1000000;
-    // Numes: Nemotron models carry a 200k window; the rest (DeepSeek, Kimi,
-    // dealignai variants) are 1M per the provider's catalog.
-    if (provider === 'numes') return /nemotron/i.test(String(session?.model)) ? 200000 : 1000000;
+    // Numes: Nemotron and GLM-5.3 rows carry 200k-262k windows; the rest
+    // (DeepSeek, Kimi, dealignai variants) are 1M per the provider's catalog.
+    if (provider === 'numes') {
+      const model = String(session?.model || '');
+      if (/nemotron/i.test(model)) return 200000;
+      if (/glm-5\.3$/i.test(model)) return 262144;
+      return 1000000;
+    }
     return 2000000;
   }
 

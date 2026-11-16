@@ -525,7 +525,7 @@ async function run(context) {
 
       await click('#model-chip');
       await waitFor('!document.querySelector("#model-menu").classList.contains("hidden")', 3000, 'model menu');
-      await click('[data-provider="gemini"][data-model="gemini-2.5-flash"]');
+      await click('[data-provider="gemini"][data-model="gemini-3-flash-preview"]');
       await waitFor('!document.querySelector("#key-warning").classList.contains("hidden") && document.querySelector("#send-btn").disabled === true', 3000, 'missing-key composer gate');
       await click('#model-chip');
       await click('[data-provider="simulator"][data-model="sim-1"]');
@@ -566,19 +566,18 @@ async function run(context) {
 
     await step('mcp, hooks, slash commands, helper agent, groq and nvidia catalog', async () => {
       const nvidiaModels = await evaluate('window.__caelixState.providers.find(p => p.id === "nvidia")?.models?.length || 0');
-      if (nvidiaModels < 30) throw new Error(`Expected >= 30 NVIDIA models, got ${nvidiaModels}`);
+      if (nvidiaModels < 7) throw new Error(`Expected >= 7 live NVIDIA models, got ${nvidiaModels}`);
       const groqModels = await evaluate('window.__caelixState.providers.find(p => p.id === "groq")?.models?.length || 0');
       if (groqModels < 4) throw new Error(`Expected >= 4 Groq models, got ${groqModels}`);
       const coarenaModels = await evaluate('window.__caelixState.providers.find(p => p.id === "coarena")?.models?.length || 0');
-      if (coarenaModels < 10) throw new Error(`Expected >= 10 Coarena models, got ${coarenaModels}`);
-      const ollamaModels = await evaluate('window.__caelixState.providers.find(p => p.id === "ollama")?.models?.length || 0');
-      if (ollamaModels < 15) throw new Error(`Expected >= 15 Ollama Cloud models, got ${ollamaModels}`);
+      if (coarenaModels < 9) throw new Error(`Expected >= 9 Coarena (free + Claude) models, got ${coarenaModels}`);
+      const openrouterModels = await evaluate('window.__caelixState.providers.find(p => p.id === "openrouter")?.models?.length || 0');
+      if (openrouterModels < 15) throw new Error(`Expected >= 15 OpenRouter (free + Claude) models, got ${openrouterModels}`);
       const numesModels = await evaluate('window.__caelixState.providers.find(p => p.id === "numes")?.models?.length || 0');
-      if (numesModels < 6) throw new Error(`Expected >= 6 Numes models, got ${numesModels}`);
+      if (numesModels < 10) throw new Error(`Expected >= 10 Numes (free + Claude) models, got ${numesModels}`);
       await click('#keys-btn');
       await waitFor('!!document.querySelector("#key-input-groq")', 3000, 'groq key input in Keys modal');
       await waitFor('!!document.querySelector("#key-input-coarena")', 3000, 'coarena key input in Keys modal');
-      await waitFor('!!document.querySelector("#key-input-ollama")', 3000, 'ollama key input in Keys modal');
       await waitFor('!!document.querySelector("#key-input-numes")', 3000, 'numes key input in Keys modal');
       await click('#keys-close');
 
