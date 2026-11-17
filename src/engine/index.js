@@ -14,6 +14,7 @@ const {
   PROVIDER_HIGH_HEADROOM,
   auxiliaryModel,
   reviewerModel,
+  normalizeModelForProvider,
   streamOpenAICompatible,
 } = require('./providers');
 
@@ -551,7 +552,7 @@ class Engine {
     const latestUser = !isChat && Array.isArray(session.messages)
       ? [...session.messages].reverse().find((m) => m?.role === 'user' && !m.hidden && !m.isBtw)
       : null;
-    const anchorText = latestUser ? String(latestUser.content || '').replace(/\s+/g, ' ').trim().slice(0, 900) : '';
+    const anchorText = latestUser ? String(latestUser.content || '').replace(/\s+/g, ' ').trim().slice(0, 1200) : '';
     const anchor = anchorText
       ? `\n\nCurrent task anchor (stay on it until complete): ${anchorText}`
       : '';
@@ -589,7 +590,7 @@ class Engine {
     if (provider === 'numes') {
       const model = String(session?.model || '');
       if (/nemotron/i.test(model)) return 200000;
-      if (/glm-5\.3$/i.test(model)) return 262144;
+      if (/glm-5\.3(?::free)?$/i.test(model)) return 262144;
       return 1000000;
     }
     return 2000000;
@@ -721,6 +722,10 @@ class Engine {
     const changes = [];
     const terminal = [];
     let todos = session.todos || [];
+    if (Array.isArray(todos) && todos.length && todos.every((t) => t && t.status === 'completed')) {
+      todos = [];
+      session.todos = [];
+    }
     let usage = null;
     let compacted = 0;
 
@@ -791,7 +796,10 @@ class Engine {
       }
 
       const allMcpTools = this.mcp ? await this.mcp.toolDefinitions(session.cwd).catch(() => []) : [];
-      const turnTarget = { provider: session.provider, model: session.model };
+      const useTeamDraft = !options?.reviewRun && session.review === true && session.teamDraftProvider && session.teamDraftModel;
+      const turnTarget = useTeamDraft
+        ? { provider: session.teamDraftProvider, model: normalizeModelForProvider(session.teamDraftProvider, session.teamDraftModel) }
+        : { provider: session.provider, model: normalizeModelForProvider(session.provider, session.model) };
 
       let rounds = 0;
       const maxRounds = this.turnBudgetFor(session);
@@ -864,7 +872,7 @@ class Engine {
             && textTrim.length < 360
             && !asksQuestionOrBlocked
             && /\b(let me (?:now |next )?(?:check|read|inspect|edit|fix|run|update|verify|continue|finish)|i(?:'ll| will) (?:now |next )?(?:check|read|inspect|edit|fix|run|update|verify|continue|finish)|moving on to|next,? i(?:'ll| will))\b/i.test(textTrim);
-          const canAutoContinue = autoContinueCount < 5
+          const canAutoContinue = autoContinueCount < 8
             && rounds < maxRounds
             && !haltedByPermission
             && !haltedByLoop
@@ -878,12 +886,17 @@ class Engine {
               || looksLikeMidTaskPause);
           if (canAutoContinue) {
             autoContinueCount += 1;
+            const remainingList = (todos || [])
+              .filter((t) => t && (t.status === 'pending' || t.status === 'in_progress'))
+              .map((t) => `- ${t.content}`)
+              .slice(0, 8)
+              .join('\n');
             const nudge = hitTokenLimit
               ? 'Your previous reply was cut off by the output token limit. Continue right where you left off and finish all remaining work.'
               : unresolvedDiagnostics
                 ? 'Your previous edits still have unresolved syntax, TypeScript, or lint diagnostic errors reported above. Inspect and fix every remaining error (including any broken cross-file callers) before finishing.'
                 : hasOpenTodos
-                  ? 'Continue executing the remaining pending/in_progress items in your todo list now without stopping until every task is completed or truly blocked.'
+                  ? `Continue building and executing these remaining open tasks using tools right now without stopping until every item is completed and verified:\n${remainingList}`
                   : 'Continue and finish the rest of the task now using tools — do not pause mid-work.';
             emit({
               type: 'status',
@@ -1234,22 +1247,35 @@ class Engine {
   }
 
   // Team mode: hand the just-finished turn's work to an independent model —
-  // always a different provider family than the chat's own — which verifies,
-  // fixes and proves it. Solo free models measurably miss bugs this catches.
+  // either the user's chosen Model 2 reviewer, or the strongest verified
+  // cross-family model from another provider.
   async runTeamReview(sessionId, { task, changes }) {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
-    const reviewerProvider = PROVIDER_SPILLOVER.find(
-      (candidate) => candidate !== session.provider && this.getKeyPool(candidate).length,
-    );
-    if (!reviewerProvider) {
-      this.emit({ sessionId, type: 'status', stage: 'review', message: 'Team review skipped — save a key on a second provider to enable it.' });
-      return null;
+    let reviewerProvider = session.teamReviewProvider || null;
+    let reviewerModelId = session.teamReviewModel || null;
+    if (reviewerProvider && reviewerModelId) {
+      const isKeyless = Boolean(PROVIDERS[reviewerProvider]?.keyless);
+      if (!isKeyless && !this.getKeyPool(reviewerProvider).length) {
+        reviewerProvider = null;
+        reviewerModelId = null;
+      }
     }
-    const reviewerModelId = reviewerModel(reviewerProvider);
+    if (!reviewerProvider || !reviewerModelId) {
+      const builderProvider = session.teamDraftProvider || session.provider;
+      reviewerProvider = PROVIDER_SPILLOVER.find(
+        (candidate) => candidate !== builderProvider && this.getKeyPool(candidate).length,
+      );
+      if (!reviewerProvider) {
+        this.emit({ sessionId, type: 'status', stage: 'review', message: 'Team review skipped — pick a second model or save a key on another provider to enable it.' });
+        return null;
+      }
+      reviewerModelId = reviewerModel(reviewerProvider);
+    }
+    reviewerModelId = normalizeModelForProvider(reviewerProvider, reviewerModelId);
     const original = { provider: session.provider, model: session.model };
     const fileList = changes.map((item) => item.file).slice(0, 10).join(', ');
-    this.emit({ sessionId, type: 'status', stage: 'review', message: `Team review running on ${PROVIDERS[reviewerProvider].name} · ${reviewerModelId}…` });
+    this.emit({ sessionId, type: 'status', stage: 'review', message: `Team review running on ${PROVIDERS[reviewerProvider]?.name || reviewerProvider} · ${reviewerModelId}…` });
     try {
       session.provider = reviewerProvider;
       session.model = reviewerModelId;
@@ -1263,7 +1289,7 @@ class Engine {
 
   async callKeyed({ session, messages, extraTools = [], disableTools = false, target = null, emit, signal }) {
     let activeProviderId = target?.provider || session.provider;
-    let activeModelId = target?.model || session.model;
+    let activeModelId = normalizeModelForProvider(activeProviderId, target?.model || session.model);
     const rawTools = disableTools ? [] : this.filterToolsForTurn(session, [...toolDefinitions(session.cwd), ...extraTools]);
     let emitted = false;
     let sleepAttempt = 0;
@@ -1323,7 +1349,7 @@ class Engine {
               ? [
                 { provider: 'nvidia', model: 'nvidia/nemotron-3.5-super-vl-120b-a12b' },
                 { provider: 'openrouter', model: 'nvidia/nemotron-3.5-super-vl:free' },
-                { provider: 'numes', model: 'moonshotai/kimi-k3.1-pro' },
+                { provider: 'numes', model: 'moonshotai/kimi-k3.1-pro:free' },
                 { provider: 'coarena', model: 'gpt-6-luna' },
                 { provider: 'gemini', model: 'gemini-3-flash-preview' },
               ]
@@ -1331,7 +1357,7 @@ class Engine {
                 { provider: 'gemini', model: 'gemini-3-flash-preview' },
                 { provider: 'nvidia', model: 'nvidia/nemotron-3.5-super-vl-120b-a12b' },
                 { provider: 'openrouter', model: 'nvidia/nemotron-3.5-super-vl:free' },
-                { provider: 'numes', model: 'moonshotai/kimi-k3.1-pro' },
+                { provider: 'numes', model: 'moonshotai/kimi-k3.1-pro:free' },
                 { provider: 'coarena', model: 'gpt-6-luna' },
               ];
             const visionTarget = VISION_CANDIDATES.find((c) => {
@@ -1382,8 +1408,10 @@ class Engine {
         const isCoarenaStall = activeProviderId === 'coarena'
           && (status === 408 || /did not respond within|stalled/i.test(error.message));
         const isNumesUnavailable = activeProviderId === 'numes'
-          && (status === 408 || status === 503 || /did not respond within|stalled|no numes endpoint/i.test(error.message));
-        const isCoarenaUnavailable = activeProviderId === 'coarena' && (status === 404 || status === 503 || isCoarenaStall);
+          && (status === 408 || status === 502 || status === 503
+            || (status === 402 && !/claude-/i.test(activeModelId))
+            || /did not respond within|stalled|no numes endpoint|no provider is available|insufficient credits/i.test(error.message));
+        const isCoarenaUnavailable = activeProviderId === 'coarena' && (status === 404 || status === 502 || status === 503 || status === 504 || isCoarenaStall);
         const retryable = isRateLimit || status === 408 || status >= 500 || isNetworkFailure;
         const fast = process.env.CAELIX_FAST_RETRY === '1';
 
@@ -2326,12 +2354,31 @@ class Engine {
     }
   }
 
-  // Team review toggle for a chat. Persisted on the session like mode.
+  // Team review toggle + 2-model picker config for a chat. Persisted on the session.
   setReview(sessionId, value) {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error('No active chat.');
-    this.sessions.update(sessionId, { review: Boolean(value) });
-    return { sessionId, review: Boolean(value) };
+    const patch = value && typeof value === 'object' ? value : { review: Boolean(value) };
+    const clean = {
+      review: patch.review !== undefined ? Boolean(patch.review) : Boolean(session.review),
+    };
+    if (patch.draftProvider !== undefined) clean.teamDraftProvider = patch.draftProvider || null;
+    if (patch.draftModel !== undefined) clean.teamDraftModel = patch.draftModel || null;
+    if (patch.reviewProvider !== undefined) clean.teamReviewProvider = patch.reviewProvider || null;
+    if (patch.reviewModel !== undefined) clean.teamReviewModel = patch.reviewModel || null;
+    if (clean.teamDraftProvider && clean.teamDraftModel) {
+      clean.provider = clean.teamDraftProvider;
+      clean.model = clean.teamDraftModel;
+    }
+    this.sessions.update(sessionId, clean);
+    return {
+      sessionId,
+      review: clean.review,
+      teamDraftProvider: session.teamDraftProvider || session.provider,
+      teamDraftModel: session.teamDraftModel || session.model,
+      teamReviewProvider: session.teamReviewProvider || null,
+      teamReviewModel: session.teamReviewModel || null,
+    };
   }
 
   terminalTabs(sessionId) {

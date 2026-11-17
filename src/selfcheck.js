@@ -580,6 +580,18 @@ async function run(context) {
       await waitFor('!!document.querySelector("#key-input-coarena")', 3000, 'coarena key input in Keys modal');
       await waitFor('!!document.querySelector("#key-input-numes")', 3000, 'numes key input in Keys modal');
       await click('#keys-close');
+      await click('#team-chip');
+      await waitFor('!document.querySelector("#team-menu")?.hidden', 3000, 'team menu popover open');
+      const teamOptCount = await evaluate('document.querySelectorAll("#team-model-1 option").length');
+      if (teamOptCount < 2) throw new Error(`Expected >= 2 Team model-1 options, got ${teamOptCount}`);
+      const teamOpt2Count = await evaluate('document.querySelectorAll("#team-model-2 option").length');
+      if (teamOpt2Count < 2) throw new Error(`Expected >= 2 Team model-2 options, got ${teamOpt2Count}`);
+      await click('#team-save-btn');
+      await waitFor('document.querySelector("#team-chip")?.textContent.includes("Team ✓")', 3000, 'team chip active after save');
+      await click('#team-chip');
+      await waitFor('!document.querySelector("#team-menu")?.hidden', 3000, 'team menu reopen');
+      await click('#team-off-btn');
+      await waitFor('!document.querySelector("#team-chip")?.textContent.includes("Team ✓")', 3000, 'team chip off after disable');
 
       // Slash commands menu + /help + /btw + /compact
       await setValue('#prompt', '/');

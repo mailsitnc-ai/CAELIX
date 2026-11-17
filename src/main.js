@@ -572,7 +572,7 @@ function registerIpc() {
   ipcMain.handle('sessions:update', (_event, { id, ...patch }) => {
     const existing = sessions.get(id);
     const allowed = {};
-    for (const key of ['provider', 'model', 'mode', 'cwd', 'title']) {
+    for (const key of ['provider', 'model', 'mode', 'cwd', 'title', 'review', 'teamDraftProvider', 'teamDraftModel', 'teamReviewProvider', 'teamReviewModel']) {
       if (patch[key] !== undefined) allowed[key] = patch[key];
     }
     if (patch.surface === 'chat' || patch.surface === 'code') {
@@ -603,8 +603,12 @@ function registerIpc() {
     return folder;
   });
 
-  ipcMain.handle('chat:set-review', (_event, { sessionId, value } = {}) => {
-    return engine.setReview(sessionId, value);
+  ipcMain.handle('chat:set-review', (_event, payload = {}) => {
+    const { sessionId, value, ...rest } = payload;
+    if (value !== undefined && typeof value === 'object' && value !== null) {
+      return engine.setReview(sessionId, value);
+    }
+    return engine.setReview(sessionId, Object.keys(rest).length ? { review: value, ...rest } : value);
   });
 
   ipcMain.handle('chat:send', async (_event, { sessionId, text, attachments } = {}) => {    const session = sessions.get(sessionId);

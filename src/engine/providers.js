@@ -115,19 +115,21 @@ const PROVIDERS = {
     baseUrl: 'https://api.numes.ai/api/v1/chat/completions',
     probeUrl: 'https://api.numes.ai/api/v1/key',
     models: [
-      'deepseek/deepseek-v4.1-flash',
-      'z-ai/glm-5.3',
-      'moonshotai/kimi-k3.1-pro',
-      'dealignai/glm-5.3-flash-uncensored-fp8',
-      'dealignai/deepseek-v4.1-flash-uncensored-fp8',
-      'dealignai/glm-5.3-uncensored-fp8',
-      'uniboshi/kimi-k3-abliterated-v1',
+      'deepseek/deepseek-v4.1-flash:free',
+      'nvidia/nemotron-3-ultra-550b-a55b:free',
+      'z-ai/glm-5.3-flash:free',
+      'moonshotai/kimi-k3.1-pro:free',
+      'z-ai/glm-5.3:free',
+      'dealignai/glm-5.3-flash-uncensored-fp8:free',
+      'dealignai/deepseek-v4.1-flash-uncensored-fp8:free',
+      'dealignai/glm-5.3-uncensored-fp8:free',
+      'uniboshi/kimi-k3-abliterated-v1:free',
       'anthropic/claude-opus-5.5',
       'anthropic/claude-sonnet-5.5',
       'anthropic/claude-haiku-5.5',
       'anthropic/claude-fable-5.2',
     ],
-    defaultModel: 'deepseek/deepseek-v4.1-flash',
+    defaultModel: 'deepseek/deepseek-v4.1-flash:free',
     color: '#22d3ee',
   },
   omniroute: {
@@ -231,15 +233,37 @@ const MODEL_NOTES = {
   'claude-fable-5-2': 'Claude · Coarena credits · 128k · Fable 5.2',
   'claude-fable-5-1': 'Claude · Coarena credits · 128k · Fable 5.1',
   'claude-fable-5': 'Claude · Coarena credits · 128k · Fable 5',
-  'deepseek/deepseek-v4.1-flash': 'Numes · $0/token free tier · 1M · Tools · Default',
-  'moonshotai/kimi-k3.1-pro': 'Numes · $0/token free tier · 1M · Tools & reasoning',
-  'z-ai/glm-5.3': 'Numes · $0/token free tier · 262k · Flagship GLM · Tools',
-  'dealignai/deepseek-v4.1-flash-uncensored-fp8': 'Numes · $0/token · Slow cold-start (auto-fails over)',
-  'dealignai/glm-5.3-flash-uncensored-fp8': 'Numes · $0/token · Fast uncensored GLM Flash',
-  'dealignai/glm-5.3-uncensored-fp8': 'Numes · $0/token · Slower uncensored GLM (60s window)',
-  'uniboshi/kimi-k3-abliterated-v1': 'Numes · $0/token · 1M uncensored Kimi K3',
+  'deepseek/deepseek-v4.1-flash:free': 'Numes · $0/token free tier · 1M · Tools · Default',
+  'nvidia/nemotron-3-ultra-550b-a55b:free': 'Numes · $0/token free tier · 1M · Flagship 550B · Tools',
+  'z-ai/glm-5.3-flash:free': 'Numes · $0/token free tier · 1M · Fast GLM Flash · Tools',
+  'moonshotai/kimi-k3.1-pro:free': 'Numes · $0/token free tier · 1M · Tools & reasoning',
+  'z-ai/glm-5.3:free': 'Numes · $0/token free tier · 262k · Flagship GLM (auto-fails over if slow)',
+  'dealignai/deepseek-v4.1-flash-uncensored-fp8:free': 'Numes · $0/token · Uncensored (auto-fails over when offline)',
+  'dealignai/glm-5.3-flash-uncensored-fp8:free': 'Numes · $0/token · Uncensored GLM Flash (auto-fails over when offline)',
+  'dealignai/glm-5.3-uncensored-fp8:free': 'Numes · $0/token · Uncensored GLM (auto-fails over when offline)',
+  'uniboshi/kimi-k3-abliterated-v1:free': 'Numes · $0/token · 1M uncensored Kimi K3 (auto-fails over when offline)',
   'anthropic/claude-fable-5.2': 'Claude · Paid credits · Fable 5.2',
 };
+
+const NUMES_LEGACY_FREE_ALIASES = {
+  'deepseek/deepseek-v4.1-flash': 'deepseek/deepseek-v4.1-flash:free',
+  'z-ai/glm-5.3': 'z-ai/glm-5.3:free',
+  'z-ai/glm-5.3-flash': 'z-ai/glm-5.3-flash:free',
+  'moonshotai/kimi-k3.1-pro': 'moonshotai/kimi-k3.1-pro:free',
+  'nvidia/nemotron-3-ultra-550b-a55b': 'nvidia/nemotron-3-ultra-550b-a55b:free',
+  'dealignai/glm-5.3-flash-uncensored-fp8': 'dealignai/glm-5.3-flash-uncensored-fp8:free',
+  'dealignai/deepseek-v4.1-flash-uncensored-fp8': 'dealignai/deepseek-v4.1-flash-uncensored-fp8:free',
+  'dealignai/glm-5.3-uncensored-fp8': 'dealignai/glm-5.3-uncensored-fp8:free',
+  'uniboshi/kimi-k3-abliterated-v1': 'uniboshi/kimi-k3-abliterated-v1:free',
+};
+
+function normalizeModelForProvider(providerId, modelId) {
+  const id = String(modelId || '');
+  if (providerId === 'numes' && NUMES_LEGACY_FREE_ALIASES[id]) {
+    return NUMES_LEGACY_FREE_ALIASES[id];
+  }
+  return id;
+}
 
 // Providers whose models carry separate RPM/TPM/RPD quota buckets.
 const MODEL_FAILOVER = {
@@ -248,7 +272,7 @@ const MODEL_FAILOVER = {
   groq: ['openai/gpt-oss-20b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-120b'],
   openrouter: ['openrouter/free', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'nvidia/nemotron-3.5-super-vl:free', 'nvidia/nemotron-3.5-lightning:free', 'baidu/ernie-5.5-flash-preview:free'],
   coarena: ['gpt-6-luna', 'gemini-3-8-flash', 'deepseek-v4-1-flash-1017'],
-  numes: ['deepseek/deepseek-v4.1-flash', 'moonshotai/kimi-k3.1-pro', 'z-ai/glm-5.3'],
+  numes: ['deepseek/deepseek-v4.1-flash:free', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'z-ai/glm-5.3-flash:free', 'moonshotai/kimi-k3.1-pro:free'],
 };
 
 // Order when spilling over across different providers that have saved keys.
@@ -257,7 +281,7 @@ const PROVIDER_HIGH_HEADROOM = {
   gemini: 'gemini-3.5-flash-lite',
   nvidia: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
   openrouter: 'openrouter/free',
-  numes: 'deepseek/deepseek-v4.1-flash',
+  numes: 'deepseek/deepseek-v4.1-flash:free',
   groq: 'qwen/qwen3.8-27b',
 };
 
@@ -416,10 +440,10 @@ function friendlyDetail(provider, status, detail) {
       return 'Numes rejected the API key. Copy or create a key at https://numes.ai/dashboard/keys and save it here in Keys.';
     }
     if (status === 402) {
-      return `${text ? `${text} — ` : ''}This Claude or paid Numes model requires credits. Top up at https://numes.ai/dashboard or switch to one of Numes' $0 models (deepseek/deepseek-v4.1-flash, moonshotai/kimi-k3.1-pro, z-ai/glm-5.3).`;
+      return `${text ? `${text} — ` : ''}This Claude or paid Numes model requires credits. Top up at https://numes.ai/dashboard or switch to one of Numes' $0 :free models (deepseek/deepseek-v4.1-flash:free, nvidia/nemotron-3-ultra-550b-a55b:free, z-ai/glm-5.3-flash:free).`;
     }
-    if (status === 503) {
-      return `${text ? `${text} — ` : ''}No Numes endpoint could serve this model right now. Pick another tool-capable model in the list, or Refresh the catalog to see what the key can serve.`;
+    if (status === 502 || status === 503) {
+      return `${text ? `${text} — ` : ''}No Numes endpoint could serve this model right now. Pick another tool-capable :free model in the list, or Refresh the catalog to see what the key can serve.`;
     }
   }
   return text;
@@ -492,7 +516,7 @@ async function streamOpenAICompatible(options) {
   }
 
   const body = {
-    model,
+    model: normalizeModelForProvider(provider, model),
     messages: normalizeMessages(messages, { stripImages }),
     stream: true,
     temperature: 0.2,
@@ -965,6 +989,13 @@ async function fetchProviderModels(provider, apiKey) {
       const claudeRest = ids.filter((id) => !freeSet.has(id) && isClaudeId(id));
       return [...new Set([...freeFirst, ...claudeRest])].slice(0, 400);
     }
+    if (provider === 'numes') {
+      const liveSet = new Set(ids);
+      const curatedLive = meta.models.filter((id) => liveSet.has(id));
+      const rest = ids.filter((id) => !curatedLive.includes(id) && !/^(dealignai|uniboshi)\//i.test(id));
+      const unstableRest = ids.filter((id) => !curatedLive.includes(id) && /^(dealignai|uniboshi)\//i.test(id));
+      return [...new Set([...curatedLive, ...rest, ...unstableRest])].slice(0, 400);
+    }
     return [...new Set([...meta.models, ...ids])].slice(0, 400);
   } finally {
     clearTimeout(timer);
@@ -981,7 +1012,7 @@ const MODEL_ROUTING = {
   nvidia: 'nvidia/nemotron-3.5-lightning-30b-a3b',
   openrouter: 'openrouter/free',
   coarena: 'gemini-3-8-flash',
-  numes: 'z-ai/glm-5.3',
+  numes: 'deepseek/deepseek-v4.1-flash:free',
 };
 
 // The auxiliary model for a provider, or the session model when no cheaper
@@ -1001,7 +1032,7 @@ const REVIEW_MODEL = {
   groq: 'openai/gpt-oss-120b',
   nvidia: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
   openrouter: 'nvidia/nemotron-3-ultra-550b-a55b:free',
-  numes: 'moonshotai/kimi-k3.1-pro',
+  numes: 'nvidia/nemotron-3-ultra-550b-a55b:free',
   coarena: 'gpt-6-luna',
 };
 
@@ -1014,6 +1045,6 @@ function reviewerModel(providerId) {
 
 module.exports = {
   PROVIDERS, MODEL_NOTES, MODEL_FAILOVER, PROVIDER_SPILLOVER, PROVIDER_HIGH_HEADROOM, MODELS_ENDPOINTS,
-  MODEL_ROUTING, auxiliaryModel, REVIEW_MODEL, reviewerModel,
+  MODEL_ROUTING, auxiliaryModel, REVIEW_MODEL, reviewerModel, normalizeModelForProvider,
   providerList, streamOpenAICompatible, testKey, fetchProviderModels, readError,
 };

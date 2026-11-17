@@ -1,5 +1,16 @@
 # CAELIX changelog
 
+## 0.1.36 — Multi-task popup & build follow-through, Numes `:free` catalog/failover fix, and custom 2-model Team Mode picker
+
+- **Multi-task popup & build follow-through (`src/renderer/app.js`, `src/engine/tools.js`, `src/engine/index.js`):**
+  - Updated `#question-card` (`ask_user`) to support `multi_select` toggling with **Submit selected**, Enter-to-submit in `#question-input`, and combining selected options + typed notes; added a clear directive on the tool return so the model immediately proceeds to build all requested tasks.
+  - Updated `todo_write` to accept `todos` / `tasks` / string arrays in addition to `items`, cleared finished completed `todos` from earlier turns at new prompt start, raised open-todo `autoContinueCount` to `8`, and injected remaining open tasks verbatim into continuation nudges.
+- **Fix Numes (`glm-5.3`, `dealignai`, `deepseek`, `kimi`) & `gpt-6-luna` reliability (`src/engine/providers.js`, `src/engine/index.js`):**
+  - Migrated Numes `$0` free models to Numes' new `:free` slugs (`deepseek/deepseek-v4.1-flash:free`, `nvidia/nemotron-3-ultra-550b-a55b:free`, `z-ai/glm-5.3-flash:free`, `moonshotai/kimi-k3.1-pro:free`, `z-ai/glm-5.3:free`, plus the `:free` uncensored slugs sorted after verified live models) and added automatic `normalizeModelForProvider()` aliasing for legacy unsuffixed slugs across saved chats.
+  - Treated Numes `502` / non-Claude `402` and Coarena `502` / `504` gateway blips as model-endpoint failovers so `dealignai` / `glm-5.3` / `gpt-6-luna` seamlessly fail over onto live healthy endpoints instead of erroring out.
+- **Pick BOTH Team Mode models in UI (`src/renderer/index.html`, `src/renderer/app.js`, `src/renderer/styles.css`, `src/main.js`, `src/engine/index.js`):**
+  - Clicking **Team** opens a Team Mode popover allowing users to toggle Team Mode on/off and pick both **Model 1 (Builder)** and **Model 2 (Reviewer)** (or Auto strongest cross-provider reviewer), persisted per chat across `setReview` / `sessions:update` / `runTeamReview`.
+
 ## 0.1.35 — Project-wide TypeScript/linter/ecosystem diagnostics, live repo symbol map, latest-task anchoring, and diagnostic finish gate
 
 - **Deep project-wide diagnostics (`src/engine/diagnostics.js`):** Added live project checks alongside instant syntax validation — `tsc --noEmit` across `tsconfig.json` and `jsconfig.json` (surfacing both touched-file errors and cross-file caller breakage), local ESLint, Python `ruff`/`pyright` in `.venv`/`venv`, `go vet ./...`, and `cargo check` — without stale `< 2.5s` caching so immediate fixes always report true disk status cleanly.

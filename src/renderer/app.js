@@ -290,11 +290,13 @@ function renderChips() {
   $('#composer-mode').textContent = mode.title;
   const teamChip = $('#team-chip');
   if (teamChip) {
+    const m1 = session.teamDraftModel || session.model || 'Model 1';
+    const m2 = session.teamReviewModel ? `${session.teamReviewModel}` : 'Auto reviewer';
     teamChip.classList.toggle('active', Boolean(session.review));
     teamChip.textContent = session.review ? 'Team ✓' : 'Team';
     teamChip.title = session.review
-      ? 'Team review is ON — after edits, a second provider reviews and proves the work'
-      : 'Team review — after edits, a second provider reviews and proves the work';
+      ? `Team ON: ${m1} → ${m2} (click to pick 2 models or turn off)`
+      : `Team Mode off — click to pick 2 models (Builder + Reviewer)`;
   }
   $('#model-chip').textContent = session.model || 'Model';
   $('#composer-model').textContent = session.model || 'Model';
@@ -1206,11 +1208,13 @@ function appendQuestion(request) {
   card.className = 'question-card';
   card.id = 'question-card';
   const options = Array.isArray(request.options) ? request.options : [];
+  const multi = Boolean(request.multiSelect) && options.length > 1;
   card.innerHTML = `
-    <div class="question-title"><span>?</span>CAELIX asks</div>
+    <div class="question-title"><span>?</span>CAELIX asks${multi ? ' (select all that apply)' : ''}</div>
     <div class="question-text">${escapeHtml(request.question || '')}</div>
-    <div class="question-options">${options.map((option) => `<button data-answer="${escapeHtml(option)}">${escapeHtml(option)}</button>`).join('')}</div>
-    ${request.allowOther === false ? '' : '<div class="question-other"><input id="question-input" placeholder="Or type an answer" aria-label="Your answer"><button id="question-send">Answer</button></div>'}`;
+    <div class="question-options">${options.map((option) => `<button type="button" data-answer="${escapeHtml(option)}">${escapeHtml(option)}</button>`).join('')}</div>
+    ${multi ? '<div class="question-submit-row"><button type="button" class="question-submit" id="question-multi-send">Submit selected</button></div>' : ''}
+    ${request.allowOther === false ? '' : '<div class="question-other"><input id="question-input" placeholder="Or type an answer" aria-label="Your answer"><button type="button" id="question-send">Answer</button></div>'}`;
 
   const finish = async (answer) => {
     if (card.dataset.answered) return;
@@ -1225,16 +1229,39 @@ function appendQuestion(request) {
     await api.invoke('question:respond', { id: request.id, answer });
   };
 
+  const selectedValues = () => $$('[data-answer].selected', card).map((b) => b.dataset.answer);
   for (const button of $$('[data-answer]', card)) {
-    button.addEventListener('click', () => finish(button.dataset.answer));
-  }
-  const send = $('#question-send', card);
-  if (send) {
-    send.addEventListener('click', () => {
-      const value = $('#question-input', card).value.trim();
-      if (value) finish(value);
+    button.addEventListener('click', () => {
+      if (multi) {
+        button.classList.toggle('selected');
+        return;
+      }
+      finish(button.dataset.answer);
     });
   }
+  const multiBtn = $('#question-multi-send', card);
+  if (multiBtn) {
+    multiBtn.addEventListener('click', () => {
+      const picked = selectedValues();
+      const extra = $('#question-input', card)?.value.trim();
+      const combined = [...picked, ...(extra ? [extra] : [])].join('; ');
+      if (combined) finish(combined);
+    });
+  }
+  const submitInput = () => {
+    const value = $('#question-input', card)?.value.trim();
+    const picked = multi ? selectedValues() : [];
+    const combined = [...picked, ...(value ? [value] : [])].join('; ');
+    if (combined) finish(combined);
+  };
+  const send = $('#question-send', card);
+  if (send) send.addEventListener('click', submitInput);
+  $('#question-input', card)?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      submitInput();
+    }
+  });
   state.currentAssistant.body.appendChild(card);
   scrollToBottom();
 }
@@ -2659,27 +2686,121 @@ function bind() {
   $('#mode-chip').addEventListener('click', (event) => {
     event.stopPropagation();
     $('#model-menu').classList.add('hidden');
+    $('#team-menu')?.classList.add('hidden');
     const menu = $('#mode-menu');
     menu.classList.toggle('hidden');
     if (!menu.classList.contains('hidden')) renderModeMenu();
   });
-  $('#team-chip').addEventListener('click', async () => {
-    if (!state.session) return;
-    const next = !state.session.review;
-    state.session.review = next;
-    renderChips();
-    try {
-      await api.invoke('chat:set-review', { sessionId: state.session.id, value: next });
-      toast(next ? 'Team review ON — a second provider will check every edit.' : 'Team review off.');
-    } catch (error) {
-      state.session.review = !next;
-      renderChips();
-      appendError(error.message);
+  function teamModelOptions(selectedProvider, selectedModel, includeAuto = false) {
+    const out = includeAuto ? ['<option value="">Auto (strongest other provider)</option>'] : [];
+    const seen = new Set();
+    const configuredIds = new Set(state.keys.filter((k) => k.configured).map((k) => k.id));
+    for (const p of state.providers) {
+      if (!p.keyless && !configuredIds.has(p.id) && p.id !== selectedProvider) continue;
+      for (const m of p.models || []) {
+        const val = `${p.id}::${m}`;
+        if (seen.has(val)) continue;
+        seen.add(val);
+        const sel = p.id === selectedProvider && m === selectedModel ? ' selected' : '';
+        out.push(`<option value="${escapeHtml(val)}"${sel}>${escapeHtml(p.name)} · ${escapeHtml(m)}</option>`);
+      }
     }
+    if (selectedProvider && selectedModel) {
+      const curVal = `${selectedProvider}::${selectedModel}`;
+      if (!seen.has(curVal)) {
+        out.push(`<option value="${escapeHtml(curVal)}" selected>${escapeHtml(selectedProvider)} · ${escapeHtml(selectedModel)}</option>`);
+      }
+    }
+    return out.join('');
+  }
+  function renderTeamMenu() {
+    const menu = $('#team-menu');
+    const session = state.session;
+    if (!menu || !session) return;
+    const p1 = session.teamDraftProvider || session.provider;
+    const m1 = session.teamDraftModel || session.model;
+    const p2 = session.teamReviewProvider || '';
+    const m2 = session.teamReviewModel || '';
+    menu.innerHTML = `
+      <div class="team-pop">
+        <div class="team-pop-head">
+          <span>Team Mode (2 models)</span>
+          <label><input type="checkbox" id="team-enable-chk" ${session.review ? 'checked' : ''}> Active</label>
+        </div>
+        <label class="team-pop-row">Model 1 (Builder)
+          <select id="team-model-1">${teamModelOptions(p1, m1, false)}</select>
+        </label>
+        <label class="team-pop-row">Model 2 (Reviewer)
+          <select id="team-model-2">${teamModelOptions(p2, m2, true)}</select>
+        </label>
+        <div class="team-pop-actions">
+          <button type="button" id="team-off-btn">${session.review ? 'Turn off' : 'Close'}</button>
+          <button type="button" class="primary" id="team-save-btn">Save & Enable</button>
+        </div>
+      </div>`;
+    const applyTeam = async (enable) => {
+      const v1 = ($('#team-model-1', menu)?.value || '').split('::');
+      const v2 = ($('#team-model-2', menu)?.value || '').split('::');
+      const draftProvider = v1[0] || session.provider;
+      const draftModel = v1.slice(1).join('::') || session.model;
+      const reviewProvider = v2[0] || '';
+      const reviewModel = v2.slice(1).join('::') || '';
+      const prev = {
+        review: session.review,
+        provider: session.provider,
+        model: session.model,
+        teamDraftProvider: session.teamDraftProvider,
+        teamDraftModel: session.teamDraftModel,
+        teamReviewProvider: session.teamReviewProvider,
+        teamReviewModel: session.teamReviewModel,
+      };
+      session.review = enable;
+      session.provider = draftProvider;
+      session.model = draftModel;
+      session.teamDraftProvider = draftProvider;
+      session.teamDraftModel = draftModel;
+      session.teamReviewProvider = reviewProvider || null;
+      session.teamReviewModel = reviewModel || null;
+      renderChips();
+      menu.classList.add('hidden');
+      try {
+        await api.invoke('chat:set-review', {
+          sessionId: session.id,
+          value: {
+            review: enable,
+            draftProvider,
+            draftModel,
+            reviewProvider: reviewProvider || null,
+            reviewModel: reviewModel || null,
+          },
+        });
+        toast(enable ? `Team ON: ${draftModel} → ${reviewModel || 'auto reviewer'}` : 'Team mode off.');
+      } catch (error) {
+        Object.assign(session, prev);
+        renderChips();
+        appendError(error.message);
+      }
+    };
+    $('#team-save-btn', menu)?.addEventListener('click', () => applyTeam(true));
+    $('#team-off-btn', menu)?.addEventListener('click', () => {
+      if (session.review) applyTeam(false);
+      else menu.classList.add('hidden');
+    });
+  }
+  $('#team-chip').addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (!state.session) return;
+    $('#model-menu').classList.add('hidden');
+    $('#mode-menu').classList.add('hidden');
+    const menu = $('#team-menu');
+    if (!menu) return;
+    menu.classList.toggle('hidden');
+    if (!menu.classList.contains('hidden')) renderTeamMenu();
   });
   $('#composer-mode').addEventListener('click', (event) => {
     event.stopPropagation();
     $('#model-menu').classList.add('hidden');
+    $('#team-menu')?.classList.add('hidden');
     const menu = $('#mode-menu');
     menu.classList.toggle('hidden');
     if (!menu.classList.contains('hidden')) renderModeMenu();
@@ -2688,6 +2809,7 @@ function bind() {
     if (!event.target.closest('.chip-wrap')) {
       $('#model-menu').classList.add('hidden');
       $('#mode-menu').classList.add('hidden');
+      $('#team-menu')?.classList.add('hidden');
     }
   });
 

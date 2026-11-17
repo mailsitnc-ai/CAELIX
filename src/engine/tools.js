@@ -326,12 +326,13 @@ function toolDefinitions(root) {
     },
     {
       name: 'ask_user',
-      description: 'Ask the user a question with optional choices and wait for the answer. Use it only when a decision blocks the work.',
+      description: 'Ask the user a question with optional choices and wait for the answer. Set multi_select true when the user can choose several items at once. Use only when a decision blocks the work.',
       parameters: {
         type: 'object',
         properties: {
           question: { type: 'string' },
           options: { type: 'array', items: { type: 'string' }, description: 'Optional quick choices.' },
+          multi_select: { type: 'boolean', description: 'Allow selecting multiple choices before submitting.' },
           allow_other: { type: 'boolean', description: 'Allow a typed answer as well as the choices.' },
         },
         required: ['question'],
@@ -755,7 +756,19 @@ class ToolRunner {
   }
 
   async todoWrite(input) {
-    const items = Array.isArray(input.items) ? input.items : [];
+    const raw = Array.isArray(input.items)
+      ? input.items
+      : (Array.isArray(input.todos) ? input.todos : (Array.isArray(input.tasks) ? input.tasks : []));
+    const items = raw
+      .map((item, index) => {
+        if (typeof item === 'string') return { id: `t${index + 1}`, content: item.trim(), status: 'pending' };
+        if (!item || typeof item !== 'object') return null;
+        const content = String(item.content || item.title || item.task || item.text || '').trim();
+        if (!content) return null;
+        const status = ['pending', 'in_progress', 'completed'].includes(item.status) ? item.status : 'pending';
+        return { id: String(item.id || `t${index + 1}`), content, status };
+      })
+      .filter(Boolean);
     this.emit?.({ type: 'todos', items });
     return { output: `Updated ${items.length} task(s).`, todos: items };
   }
@@ -809,10 +822,14 @@ class ToolRunner {
     const answer = await this.questioner({
       question,
       options,
+      multiSelect: Boolean(input.multi_select),
       allowOther: input.allow_other !== false,
     });
     if (this.signal?.aborted) throw new Error('Cancelled.');
-    return { output: `The user answered: ${answer}`, meta: { answer } };
+    return {
+      output: `The user answered: ${answer}\nApply this decision immediately to carry out all remaining tasks in the current request using tools and verify any build/checks before finishing.`,
+      meta: { answer },
+    };
   }
 
   async presentPlan(input) {
