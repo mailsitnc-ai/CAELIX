@@ -575,13 +575,10 @@ async function run(context) {
       if (openrouterModels < 15) throw new Error(`Expected >= 15 OpenRouter (free + Claude) models, got ${openrouterModels}`);
       const numesModels = await evaluate('window.__caelixState.providers.find(p => p.id === "numes")?.models?.length || 0');
       if (numesModels < 9) throw new Error(`Expected >= 9 Numes (free + Claude) models, got ${numesModels}`);
-      const apinexModels = await evaluate('window.__caelixState.providers.find(p => p.id === "apinex")?.models?.length || 0');
-      if (apinexModels !== 15) throw new Error(`Expected 15 Apinex free-only models, got ${apinexModels}`);
       await click('#keys-btn');
       await waitFor('!!document.querySelector("#key-input-groq")', 3000, 'groq key input in Keys modal');
       await waitFor('!!document.querySelector("#key-input-coarena")', 3000, 'coarena key input in Keys modal');
       await waitFor('!!document.querySelector("#key-input-numes")', 3000, 'numes key input in Keys modal');
-      await waitFor('!!document.querySelector("#key-input-apinex")', 3000, 'apinex key input in Keys modal');
       await click('#keys-close');
 
       // Slash commands menu + /help + /btw + /compact

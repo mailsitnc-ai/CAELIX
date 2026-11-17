@@ -130,33 +130,6 @@ const PROVIDERS = {
     defaultModel: 'deepseek/deepseek-v4.1-flash',
     color: '#22d3ee',
   },
-  apinex: {
-    id: 'apinex',
-    name: 'Apinex',
-    keyLabel: 'Apinex API key',
-    consoleUrl: 'https://apinex.bond/keys',
-    baseUrl: 'https://api.apinex.bond/v1/chat/completions',
-    probeUrl: 'https://api.apinex.bond/v1/balance',
-    models: [
-      'free/deepseek-v4.1-flash',
-      'free/qwen-3.8-max',
-      'free/kimi-k3',
-      'free/glm-5.3',
-      'free/glm-5.3-flash',
-      'free/gemini-3.8-flash',
-      'free/gemini-4-hydrogen',
-      'free/gpt-6-luna',
-      'free/mimo-v2.6-pro',
-      'free/minimax-m3.1-flash',
-      'free/muse-spark-1.3',
-      'free/hy4',
-      'free/hy4-flash',
-      'free/deepseek-v4-pro-0813',
-      'free/deepseek-v4-flash-0731',
-    ],
-    defaultModel: 'free/deepseek-v4.1-flash',
-    color: '#f59e0b',
-  },
   omniroute: {
     id: 'omniroute',
     name: 'OmniRoute',
@@ -266,40 +239,7 @@ const MODEL_NOTES = {
   'dealignai/glm-5.3-uncensored-fp8': 'Numes · $0/token · Slower uncensored GLM (60s window)',
   'uniboshi/kimi-k3-abliterated-v1': 'Numes · $0/token · 1M uncensored Kimi K3',
   'anthropic/claude-fable-5.2': 'Claude · Paid credits · Fable 5.2',
-  'free/deepseek-v4.1-flash': 'Apinex Free · 1M · Tools & vision · Weight 3× (Default)',
-  'free/qwen-3.8-max': 'Apinex Free · 1M · Tools & vision · Weight 3×',
-  'free/kimi-k3': 'Apinex Free · 1M · Tools & vision · Weight 3×',
-  'free/glm-5.3': 'Apinex Free · 1M · Flagship GLM · Tools · Weight 4×',
-  'free/glm-5.3-flash': 'Apinex Free · 1M · Tools & vision · Weight 3×',
-  'free/gemini-3.8-flash': 'Apinex Free · 1M · Tools & vision · Weight 3×',
-  'free/gemini-4-hydrogen': 'Apinex Free · 1M · Tools & vision · Weight 5×',
-  'free/gpt-6-luna': 'Apinex Free · 1M · Tools & vision · Weight 3×',
-  'free/mimo-v2.6-pro': 'Apinex Free · 1M · Tools & vision · Weight 2×',
-  'free/minimax-m3.1-flash': 'Apinex Free · 1M · Tools & vision · Weight 2×',
-  'free/muse-spark-1.3': 'Apinex Free · 1M · Tools & vision · Weight 3×',
-  'free/hy4': 'Apinex Free · 1M · Tools & vision · Weight 2×',
-  'free/hy4-flash': 'Apinex Free · 1M · Tools & vision · Weight 2× (alias)',
-  'free/deepseek-v4-pro-0813': 'Apinex Free · 1M · DeepSeek V4 Pro · Tools · Weight 3×',
-  'free/deepseek-v4-flash-0731': 'Apinex Free · 1M · DeepSeek V4 Flash · Tools · Weight 3×',
 };
-
-const APINEX_FREE_MODELS = [
-  'free/deepseek-v4.1-flash',
-  'free/qwen-3.8-max',
-  'free/kimi-k3',
-  'free/glm-5.3',
-  'free/glm-5.3-flash',
-  'free/gemini-3.8-flash',
-  'free/gemini-4-hydrogen',
-  'free/gpt-6-luna',
-  'free/mimo-v2.6-pro',
-  'free/minimax-m3.1-flash',
-  'free/muse-spark-1.3',
-  'free/hy4',
-  'free/hy4-flash',
-  'free/deepseek-v4-pro-0813',
-  'free/deepseek-v4-flash-0731',
-];
 
 // Providers whose models carry separate RPM/TPM/RPD quota buckets.
 const MODEL_FAILOVER = {
@@ -309,17 +249,15 @@ const MODEL_FAILOVER = {
   openrouter: ['openrouter/free', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'nvidia/nemotron-3.5-super-vl:free', 'nvidia/nemotron-3.5-lightning:free', 'baidu/ernie-5.5-flash-preview:free'],
   coarena: ['gpt-6-luna', 'gemini-3-8-flash', 'deepseek-v4-1-flash-1017'],
   numes: ['deepseek/deepseek-v4.1-flash', 'moonshotai/kimi-k3.1-pro', 'z-ai/glm-5.3'],
-  apinex: ['free/deepseek-v4.1-flash', 'free/qwen-3.8-max', 'free/kimi-k3', 'free/glm-5.3-flash', 'free/gpt-6-luna'],
 };
 
 // Order when spilling over across different providers that have saved keys.
-const PROVIDER_SPILLOVER = ['gemini', 'nvidia', 'openrouter', 'numes', 'apinex', 'groq'];
+const PROVIDER_SPILLOVER = ['gemini', 'nvidia', 'openrouter', 'numes', 'groq'];
 const PROVIDER_HIGH_HEADROOM = {
   gemini: 'gemini-3.5-flash-lite',
   nvidia: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
   openrouter: 'openrouter/free',
   numes: 'deepseek/deepseek-v4.1-flash',
-  apinex: 'free/deepseek-v4.1-flash',
   groq: 'qwen/qwen3.8-27b',
 };
 
@@ -484,17 +422,6 @@ function friendlyDetail(provider, status, detail) {
       return `${text ? `${text} — ` : ''}No Numes endpoint could serve this model right now. Pick another tool-capable model in the list, or Refresh the catalog to see what the key can serve.`;
     }
   }
-  if (provider === 'apinex') {
-    if (status === 401) {
-      return 'Apinex rejected the API key. Copy or create an active sk-apx key at https://apinex.bond/keys and save it here in Keys.';
-    }
-    if (status === 402 || status === 403) {
-      return `${text ? `${text} — ` : ''}Apinex free models require connecting Telegram for the 10M one-time trial or a single $5+ top-up for 25M daily free tokens. Otherwise pick another free provider.`;
-    }
-    if (status === 429) {
-      return `${text ? `${text} — ` : ''}Apinex account RPM limit reached (15 RPM on free accounts). Retrying or failing over…`;
-    }
-  }
   return text;
 }
 
@@ -562,9 +489,6 @@ async function streamOpenAICompatible(options) {
   if (provider === 'openrouter') {
     headers['HTTP-Referer'] = 'https://caelix.local';
     headers['X-Title'] = 'CAELIX';
-  }
-  if (provider === 'apinex') {
-    headers['User-Agent'] = 'CAELIX/1.0';
   }
 
   const body = {
@@ -814,7 +738,6 @@ async function probeModel(meta, provider, apiKey, targetModel) {
         'content-type': 'application/json',
         authorization: `Bearer ${apiKey}`,
         ...(provider === 'openrouter' ? { 'HTTP-Referer': 'https://caelix.local', 'X-Title': 'CAELIX' } : {}),
-        ...(provider === 'apinex' ? { 'User-Agent': 'CAELIX/1.0' } : {}),
       },
       body: JSON.stringify({
         model: targetModel,
@@ -910,37 +833,6 @@ async function testKey(provider, apiKey, model = null) {
       clearTimeout(timer);
     }
   }
-  if (provider === 'apinex') {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 10_000);
-    try {
-      const response = await fetch(meta.probeUrl || 'https://api.apinex.bond/v1/balance', {
-        headers: { authorization: `Bearer ${apiKey}`, 'User-Agent': 'CAELIX/1.0' },
-        signal: controller.signal,
-      });
-      if (!response.ok) throw await readError(response, provider);
-      let budget = '';
-      try {
-        const data = await response.json();
-        const bal = data?.balance_usd;
-        const rpm = data?.rpm;
-        const parts = [];
-        if (Number.isFinite(Number(bal))) parts.push(`$${Number(bal).toFixed(2)}`);
-        if (Number.isFinite(Number(rpm))) parts.push(`${Number(rpm)} RPM`);
-        if (parts.length) budget = ` — ${parts.join(' · ')}`;
-      } catch { /* balance display is best-effort */ }
-      return { ok: true, model: `key${budget}` };
-    } catch (error) {
-      if (error.name === 'AbortError') {
-        const err = new Error('Apinex did not answer within 10s during key test.');
-        err.status = 408;
-        throw err;
-      }
-      throw error;
-    } finally {
-      clearTimeout(timer);
-    }
-  }
   const targetModel = model || meta.defaultModel;
   const candidates = provider === 'nvidia'
     ? [...new Set([targetModel, ...NVIDIA_TEST_FALLBACKS])]
@@ -981,7 +873,6 @@ const MODELS_ENDPOINTS = {
   omniroute: 'http://localhost:20128/v1/models',
   // Tool-capable text models, cheapest first — free $0 rows sort to the top.
   numes: 'https://api.numes.ai/api/v1/models?output_modalities=text&supported_parameters=tools&sort=pricing-low-to-high',
-  apinex: 'https://api.apinex.bond/v1/models',
 };
 
 const MODEL_EXCLUDES = {
@@ -999,8 +890,6 @@ function isZeroPriceRow(item) {
   const completion = Number(item.pricing.completion);
   return Number.isFinite(prompt) && prompt === 0 && (!Number.isFinite(completion) || completion === 0);
 }
-
-const APINEX_FREE_SET = new Set(APINEX_FREE_MODELS);
 
 function filterLiveProviderRow(provider, item) {
   const id = String(item?.id || '');
@@ -1022,11 +911,6 @@ function filterLiveProviderRow(provider, item) {
     if (!item?.pricing) return true; // Allows mock unit-test catalogs without pricing fields
     return isZeroPriceRow(item);
   }
-  if (provider === 'apinex') {
-    if (!APINEX_FREE_SET.has(id)) return false;
-    if (item?.allowFree === false || item?.supportsTools === false) return false;
-    return true;
-  }
   return true;
 }
 
@@ -1034,7 +918,7 @@ async function fetchProviderModels(provider, apiKey) {
   const meta = PROVIDERS[provider];
   if (!meta) throw new Error(`Unknown provider: ${provider}`);
   if (meta.keyless) return meta.models;
-  if ((provider === 'gemini' || provider === 'groq' || provider === 'omniroute' || provider === 'numes' || provider === 'apinex') && !apiKey) {
+  if ((provider === 'gemini' || provider === 'groq' || provider === 'omniroute' || provider === 'numes') && !apiKey) {
     throw new Error(`Add ${/^[AEIOU]/.test(meta.name) ? 'an' : 'a'} ${meta.name} key first to refresh models.`);
   }
   const controller = new AbortController();
@@ -1055,7 +939,6 @@ async function fetchProviderModels(provider, apiKey) {
     }
     const url = MODELS_ENDPOINTS[provider];
     const headers = apiKey ? { authorization: `Bearer ${apiKey}` } : {};
-    if (provider === 'apinex') headers['User-Agent'] = 'CAELIX/1.0';
     let response;
     try {
       response = await fetch(url, {
@@ -1081,9 +964,6 @@ async function fetchProviderModels(provider, apiKey) {
       const freeFirst = COARENA_TEST_FALLBACKS.filter((id) => ids.includes(id));
       const claudeRest = ids.filter((id) => !freeSet.has(id) && isClaudeId(id));
       return [...new Set([...freeFirst, ...claudeRest])].slice(0, 400);
-    }
-    if (provider === 'apinex') {
-      return APINEX_FREE_MODELS.filter((id) => ids.includes(id));
     }
     return [...new Set([...meta.models, ...ids])].slice(0, 400);
   } finally {

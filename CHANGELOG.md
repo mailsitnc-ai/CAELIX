@@ -1,5 +1,9 @@
 # CAELIX changelog
 
+## 0.1.32 — Remove Apinex after live key check proved `$0` accounts paywall `free/*` models with `HTTP 402`
+
+- **Removed Apinex (`src/engine/providers.js`, `src/engine/index.js`, `src/cli.js`, `src/selfcheck.js`):** Live testing with a real `$0.00` `sk-apx` key confirmed that while `GET /v1/balance` returns `200`, `POST /v1/chat/completions` on every `free/*` model (`free/deepseek-v4.1-flash`, `free/qwen-3.8-max`, `free/gpt-6-luna`, `free/kimi-k3`, `free/glm-5.3`) immediately fails with `HTTP 402` requiring a `$5+` deposit (`"Make a single top-up of $5 or more to unlock 25M free tokens daily for life"`). Removed Apinex cleanly from the catalog since it is not an actual zero-dollar free provider.
+
 ## 0.1.31 — Add built-in Apinex provider (15 verified `free/*` tool-capable models only)
 
 - **Added built-in Apinex provider (`src/engine/providers.js`, `src/engine/index.js`, `src/cli.js`, `src/selfcheck.js`):**
