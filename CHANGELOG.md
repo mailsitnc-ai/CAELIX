@@ -1,5 +1,12 @@
 # CAELIX changelog
 
+## 0.1.31 — Add built-in Apinex provider (15 verified `free/*` tool-capable models only)
+
+- **Added built-in Apinex provider (`src/engine/providers.js`, `src/engine/index.js`, `src/cli.js`, `src/selfcheck.js`):**
+  - Integrated OpenAI-compatible gateway (`https://api.apinex.bond/v1/chat/completions`), `GET /v1/balance` zero-token key probe, friendly 401/402/403/429 hints, `1M` context reporting, `MODEL_FAILOVER.apinex`, and cross-provider spillover support.
+  - Added explicit `User-Agent: CAELIX/1.0` headers on Apinex requests after live probing showed `api.apinex.bond` returns Cloudflare `403 HTML` when `User-Agent` is omitted in Node/Undici `fetch()`.
+  - Strictly scoped Apinex to the `15` `allowFree: true` + `supportsTools: true` `free/*` models (`free/deepseek-v4.1-flash`, `free/qwen-3.8-max`, `free/kimi-k3`, `free/glm-5.3`, `free/glm-5.3-flash`, `free/gemini-3.8-flash`, `free/gemini-4-hydrogen`, `free/gpt-6-luna`, `free/mimo-v2.6-pro`, `free/minimax-m3.1-flash`, `free/muse-spark-1.3`, `free/hy4`, `free/hy4-flash`, `free/deepseek-v4-pro-0813`, `free/deepseek-v4-flash-0731`), excluding non-free models and toolless `free/jev-1.13` both statically and on live `/v1/models` Refresh.
+
 ## 0.1.30 — Fix NVIDIA `multimodal` 400s and Gemini `function call turn` / unsigned-history 400s
 
 - **Match NVIDIA & vLLM/SGLang multimodal 400 errors (`src/engine/index.js`):** Expanded `isImageUnsupported` in `Engine.callKeyed()` to recognize `multimodal` / `enable-multimodal` / `image_url` / `vision` 400/404 rejections (`Received multimodal data but multimodal processing is not enabled…`) so CAELIX switches cleanly to a vision model or strips image attachments into text notes.

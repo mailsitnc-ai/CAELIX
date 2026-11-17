@@ -553,6 +553,7 @@ class Engine {
     const provider = session?.provider;
     if (provider === 'coarena') return 128000;
     if (provider === 'groq') return 1000000;
+    if (provider === 'apinex') return 1000000;
     // Numes: Nemotron and GLM-5.3 rows carry 200k-262k windows; the rest
     // (DeepSeek, Kimi, dealignai variants) are 1M per the provider's catalog.
     if (provider === 'numes') {
@@ -1262,16 +1263,18 @@ class Engine {
           && (status === 408 || /did not respond within|stalled/i.test(error.message));
         const isNumesUnavailable = activeProviderId === 'numes'
           && (status === 408 || status === 503 || /did not respond within|stalled|no numes endpoint/i.test(error.message));
+        const isApinexUnavailable = activeProviderId === 'apinex'
+          && (status === 408 || status === 503 || /did not respond within|stalled/i.test(error.message));
         const isCoarenaUnavailable = activeProviderId === 'coarena' && (status === 404 || status === 503 || isCoarenaStall);
         const retryable = isRateLimit || status === 408 || status >= 500 || isNetworkFailure;
         const fast = process.env.CAELIX_FAST_RETRY === '1';
 
         const shouldFailoverNetwork = isNetworkFailure && (switchCount > 0 || sleepAttempt >= 1);
-        if ((isKeyAuthOrQuota || isNvidiaStall || isCoarenaUnavailable || isNumesUnavailable || isEmptyCompletion || isTurnOrderOrSignature400 || shouldFailoverNetwork) && !emitted) {
+        if ((isKeyAuthOrQuota || isNvidiaStall || isCoarenaUnavailable || isNumesUnavailable || isApinexUnavailable || isEmptyCompletion || isTurnOrderOrSignature400 || shouldFailoverNetwork) && !emitted) {
           const coolMs = fast ? 120 : (isRateLimit ? (error.retryAfterMs || 60_000) : 300_000);
           const scope = isRateLimit && MODEL_FAILOVER[activeProviderId] ? 'model' : 'key';
           // A stall, empty completion, network drop, schema/turn-order quirk, or single unavailable endpoint is a model/host problem, not a key problem: never cool the key down for it.
-          const isModelOnlyIssue = isNvidiaStall || isCoarenaUnavailable || isNumesUnavailable || isEmptyCompletion || isTurnOrderOrSignature400 || isNetworkFailure || status === 404;
+          const isModelOnlyIssue = isNvidiaStall || isCoarenaUnavailable || isNumesUnavailable || isApinexUnavailable || isEmptyCompletion || isTurnOrderOrSignature400 || isNetworkFailure || status === 404;
           if (!isModelOnlyIssue) {
             this.markKeyCooldown(activeProviderId, picked.index, coolMs, activeModelId, scope);
           }
