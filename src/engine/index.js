@@ -27,6 +27,7 @@ const PLAN_SAFE_TOOLS = new Set([
 ]);
 const { AgentRegistry } = require('./agents');
 const { diffLines } = require('./diff');
+const outline = require('./outline');
 
 const MODE_RULES = {
   ask: 'Ask mode: research freely, but every write, shell command, network request or out-of-project action needs the user\'s approval. Never claim an action succeeded before its tool result arrives.',
@@ -302,6 +303,7 @@ class Engine {
     this.terminals = new TerminalManager((event) => this.emit(event));
     this.controllers = new Map();
     this.steeringQueues = new Map();
+    this.outlineCache = new Map();
     this.allowances = new Map();
     this.loadedMcpTools = new Map();
     this.keyCursor = new Map();
@@ -504,6 +506,17 @@ class Engine {
     }));
   }
 
+  // Cached repo symbol map, rebuilt at most every 5 minutes per project.
+  outlineFor(cwd) {
+    if (!cwd) return '';
+    const cached = this.outlineCache.get(cwd);
+    if (cached && Date.now() - cached.at < 5 * 60_000) return cached.text;
+    let text = '';
+    try { text = outline.build(cwd); } catch { text = ''; }
+    this.outlineCache.set(cwd, { at: Date.now(), text });
+    return text;
+  }
+
   systemPrompt(session) {
     const memory = this.loadMemory(session.cwd);
     const blocks = memory.map((entry) => `\n\nProject instructions from ${entry.file}:\n${entry.text}`);
@@ -525,10 +538,23 @@ class Engine {
     }
     const tools = [...toolDefinitions(session.cwd).map((tool) => tool.name), ...activeMcpNames].join(', ');
     const agentNames = this.agents ? this.agents.list(session.cwd).map((a) => `${a.id} (${a.name})`).join(', ') : '';
+    const isChat = session.surface === 'chat';
     const todos = Array.isArray(session.todos) && session.todos.length
       ? `\n\nCurrent task list:\n${session.todos.map((item) => `- [${item.status || 'pending'}] ${item.content}`).join('\n')}`
       : '';
-    const isChat = session.surface === 'chat';
+    // Repo symbol map (ceiling helper): free models get no prompt caching and
+    // drift on long multi-file work, so a compact exported-symbols map is
+    // re-sent every round — the model sees the repo's shape without grepping.
+    const outline = isChat ? '' : this.outlineFor(session.cwd);
+    // Task anchor (ceiling helper): keep the current user task riding along so
+    // a 20+ step multi-file refactor never drifts from what "done" means.
+    const latestUser = !isChat && Array.isArray(session.messages)
+      ? [...session.messages].reverse().find((m) => m?.role === 'user' && !m.hidden && !m.isBtw)
+      : null;
+    const anchorText = latestUser ? String(latestUser.content || '').replace(/\s+/g, ' ').trim().slice(0, 900) : '';
+    const anchor = anchorText
+      ? `\n\nCurrent task anchor (stay on it until complete): ${anchorText}`
+      : '';
     return [
       isChat
         ? 'You are CAELIX in Chat mode, a clean general assistant workspace separate from code project folders.'
@@ -542,6 +568,8 @@ class Engine {
       deferredLine,
       agentNames ? `Available subagents: ${agentNames}` : '',
       todos,
+      outline ? `Project symbol map (exported symbols per file — use it to plan cross-file edits without reading everything first):\n${outline}` : '',
+      anchor,
       ...blocks,
     ].filter(Boolean).join('\n');
   }
@@ -772,6 +800,7 @@ class Engine {
       let lastRoundSig = '';
       let repeatStreak = 0;
       let autoContinueCount = 0;
+      let unresolvedDiagnostics = false;
       while (rounds < maxRounds) {
         if (controller.signal.aborted) throw new Error('Cancelled.');
         // Mid-turn steering: user corrections queued while this turn was
@@ -835,7 +864,7 @@ class Engine {
             && textTrim.length < 360
             && !asksQuestionOrBlocked
             && /\b(let me (?:now |next )?(?:check|read|inspect|edit|fix|run|update|verify|continue|finish)|i(?:'ll| will) (?:now |next )?(?:check|read|inspect|edit|fix|run|update|verify|continue|finish)|moving on to|next,? i(?:'ll| will))\b/i.test(textTrim);
-          const canAutoContinue = autoContinueCount < 4
+          const canAutoContinue = autoContinueCount < 5
             && rounds < maxRounds
             && !haltedByPermission
             && !haltedByLoop
@@ -843,18 +872,27 @@ class Engine {
             && session.provider !== 'simulator'
             && session.provider !== 'claude'
             && session.mode !== 'plan'
-            && (hitTokenLimit || (hasOpenTodos && !asksQuestionOrBlocked) || looksLikeMidTaskPause);
+            && (hitTokenLimit
+              || (unresolvedDiagnostics && session.surface !== 'chat' && !asksQuestionOrBlocked)
+              || (hasOpenTodos && !asksQuestionOrBlocked)
+              || looksLikeMidTaskPause);
           if (canAutoContinue) {
             autoContinueCount += 1;
             const nudge = hitTokenLimit
               ? 'Your previous reply was cut off by the output token limit. Continue right where you left off and finish all remaining work.'
-              : hasOpenTodos
-                ? 'Continue executing the remaining pending/in_progress items in your todo list now without stopping until every task is completed or truly blocked.'
-                : 'Continue and finish the rest of the task now using tools — do not pause mid-work.';
+              : unresolvedDiagnostics
+                ? 'Your previous edits still have unresolved syntax, TypeScript, or lint diagnostic errors reported above. Inspect and fix every remaining error (including any broken cross-file callers) before finishing.'
+                : hasOpenTodos
+                  ? 'Continue executing the remaining pending/in_progress items in your todo list now without stopping until every task is completed or truly blocked.'
+                  : 'Continue and finish the rest of the task now using tools — do not pause mid-work.';
             emit({
               type: 'status',
               stage: 'continue',
-              message: hitTokenLimit ? 'Output hit token limit — continuing automatically…' : 'Continuing remaining tasks automatically…',
+              message: hitTokenLimit
+                ? 'Output hit token limit — continuing automatically…'
+                : unresolvedDiagnostics
+                  ? 'Diagnostics still report errors — continuing to fix…'
+                  : 'Continuing remaining tasks automatically…',
             });
             messages.push({
               role: 'user',
@@ -967,6 +1005,10 @@ class Engine {
             if (output.todos) {
               todos = output.todos;
               session.todos = output.todos;
+            }
+            if (call.name === 'write_file' || call.name === 'edit_file' || call.name === 'multi_edit') {
+              this.outlineCache.delete(session.cwd);
+              unresolvedDiagnostics = /Diagnostics flagged problems after this edit:/i.test(String(output.output || ''));
             }
             const durationMs = Date.now() - toolStarted;
             stepsLog.push({ name: call.name, target: String(toolTarget || ''), ok: true, durationMs });

@@ -1,5 +1,11 @@
 # CAELIX changelog
 
+## 0.1.35 — Project-wide TypeScript/linter/ecosystem diagnostics, live repo symbol map, latest-task anchoring, and diagnostic finish gate
+
+- **Deep project-wide diagnostics (`src/engine/diagnostics.js`):** Added live project checks alongside instant syntax validation — `tsc --noEmit` across `tsconfig.json` and `jsconfig.json` (surfacing both touched-file errors and cross-file caller breakage), local ESLint, Python `ruff`/`pyright` in `.venv`/`venv`, `go vet ./...`, and `cargo check` — without stale `< 2.5s` caching so immediate fixes always report true disk status cleanly.
+- **Multi-file repo symbol map & cache invalidation (`src/engine/outline.js`, `src/engine/index.js`):** Expanded `outline.build()` to index TypeScript `interface`/`type`/`enum`/`export const` declarations plus Go/Rust/Python exports down to `4+` code files, and invalidated `outlineCache` immediately after every file write/edit so new exports appear on the very next round.
+- **Latest-task anchor & unresolved-diagnostics finish gate (`src/engine/index.js`):** Anchored `systemPrompt()` on the latest active user instruction (`900` chars) across Code turns instead of stale Turn 1, and blocked `Engine.send()` from exiting with unresolved syntax/TypeScript/lint diagnostic errors before fixing broken callers.
+
 ## 0.1.34 — Fix the gaps the independent review found: real routing, strong reviewers, steering UI, CLI spillover, and fast-fail on dead quota
 
 - **Tiered routing actually wired (regression fix):** The v0.1.33 wiring for `auxiliaryModel` in `runSubagent` and the AI-title path was silently lost — read-only research subagents and chat titles used the heavy session model. Re-applied and grep-verified (`src/engine/index.js`: subagent `subModel` at ~1477/1491, title candidates at ~2219). A regression guard now asserts both wirings exist in `checks/verify_features.js`.
