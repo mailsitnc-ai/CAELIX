@@ -276,7 +276,8 @@ function providerList(selfcheck) {
     }));
 }
 
-function normalizeMessages(messages) {
+function normalizeMessages(messages, opts = {}) {
+  const stripImages = Boolean(opts.stripImages);
   return messages.map((message) => {
     if (message.role === 'assistant' && Array.isArray(message.toolCalls) && message.toolCalls.length) {
       return {
@@ -298,7 +299,11 @@ function normalizeMessages(messages) {
       const images = [];
       for (const item of message.attachments) {
         if (item.kind === 'image' && item.dataUrl) {
-          images.push({ type: 'image_url', image_url: { url: item.dataUrl } });
+          if (stripImages) {
+            textBlocks.push(`[Image attachment "${item.name || 'image'}" omitted because the active model is text-only]`);
+          } else {
+            images.push({ type: 'image_url', image_url: { url: item.dataUrl } });
+          }
         } else if (item.text) {
           textBlocks.push(`[Attached file: ${item.name || 'file'}]\n${item.text}`);
         }
@@ -469,6 +474,7 @@ async function streamOpenAICompatible(options) {
   const {
     provider, model, apiKey, messages, tools, signal, onDelta, onStatus,
     compactToolSchemas = true,
+    stripImages = false,
     maxTokens = null,
     timeoutMs = Number(process.env.CAELIX_REQUEST_TIMEOUT_MS) || (provider === 'numes' ? 60_000 : 35_000),
   } = options;
@@ -486,12 +492,14 @@ async function streamOpenAICompatible(options) {
 
   const body = {
     model,
-    messages: normalizeMessages(messages),
+    messages: normalizeMessages(messages, { stripImages }),
     stream: true,
     temperature: 0.2,
   };
   if (Number.isFinite(maxTokens) && maxTokens > 0) {
     body.max_tokens = Math.round(maxTokens);
+  } else if (provider === 'coarena' && maxTokens === null) {
+    body.max_tokens = 16384;
   }
   if (tools && tools.length) {
     body.tools = toolSchema(tools, compactToolSchemas);
@@ -548,6 +556,7 @@ async function streamOpenAICompatible(options) {
     let buffer = '';
     let text = '';
     let reasoningChars = 0;
+    let reasoningText = '';
     let lastReasoningNotice = 0;
     const calls = new Map();
     let usage = null;
@@ -575,6 +584,14 @@ async function streamOpenAICompatible(options) {
       }
       if (payload.usage) usage = payload.usage;
       const choice = payload.choices && payload.choices[0];
+      const sseErr = payload.error || choice?.error;
+      if (sseErr) {
+        const statusCode = Number(sseErr.code || sseErr.status) || 502;
+        const msg = cleanErrorDetail(sseErr.message || JSON.stringify(sseErr));
+        const err = new Error(`Provider returned ${statusCode}${msg ? `: ${friendlyDetail(provider, statusCode, msg)}` : ''}`);
+        err.status = statusCode;
+        throw err;
+      }
       if (!choice) return;
       if (choice.finish_reason) {
         finishReason = choice.finish_reason;
@@ -587,6 +604,7 @@ async function streamOpenAICompatible(options) {
       if (reasoningPiece) {
         resetStall();
         reasoningChars += reasoningPiece.length;
+        if (reasoningText.length < 24_000) reasoningText += reasoningPiece.slice(0, 24_000 - reasoningText.length);
         const now = Date.now();
         if (!text && (now - lastReasoningNotice >= 350 || reasoningChars === reasoningPiece.length)) {
           lastReasoningNotice = now;
@@ -654,6 +672,20 @@ async function streamOpenAICompatible(options) {
           ...(call.extraContent ? { extraContent: call.extraContent } : {}),
         };
       });
+
+    if (!text.trim() && !toolCalls.length) {
+      const reason = finishReason === 'length'
+        ? 'hit token limit before outputting an answer or tool call'
+        : reasoningChars > 0
+          ? `stopped after reasoning (${reasoningChars} chars) without returning an answer or tool call`
+          : 'returned an empty response (0 tokens and 0 tool calls)';
+      const err = new Error(`${meta.name} (${model}) ${reason}.`);
+      err.status = 502;
+      err.emptyResponse = true;
+      err.finishReason = finishReason;
+      err.reasoningText = reasoningText.trim();
+      throw err;
+    }
 
     return { text, toolCalls, usage, finishReason };
   } finally {

@@ -119,6 +119,10 @@ function sanitizeToolHistory(list) {
     if (answeredIds.size < expectedIds.size) {
       pendingAssistant.toolCalls = pendingAssistant.toolCalls.filter((c) => c?.id && answeredIds.has(c.id));
     }
+    if (!pendingAssistant.toolCalls.length && !String(pendingAssistant.content || '').trim()
+      && out[out.length - 1] === pendingAssistant) {
+      out.pop();
+    }
     pendingAssistant = null;
     expectedIds = new Set();
     answeredIds = new Set();
@@ -137,6 +141,7 @@ function sanitizeToolHistory(list) {
     finalizePending();
     if (msg.role === 'assistant') {
       const toolCalls = Array.isArray(msg.toolCalls) ? msg.toolCalls.filter((c) => c?.id && c?.name) : [];
+      if (!toolCalls.length && !String(msg.content || '').trim()) continue;
       const clone = { ...msg, toolCalls };
       out.push(clone);
       if (toolCalls.length) {
@@ -740,6 +745,7 @@ class Engine {
       let haltedByLoop = false;
       let lastRoundSig = '';
       let repeatStreak = 0;
+      let autoContinueCount = 0;
       while (rounds < maxRounds) {
         if (controller.signal.aborted) throw new Error('Cancelled.');
         rounds += 1;
@@ -772,9 +778,55 @@ class Engine {
           id: `msg_${Date.now()}_${rounds}`,
           createdAt: Date.now(),
         };
-        messages.push(assistant);
+        if (assistant.content.trim() || assistant.toolCalls.length) {
+          messages.push(assistant);
+        }
 
-        if (!assistant.toolCalls.length) break;
+        if (!assistant.toolCalls.length) {
+          const textTrim = String(assistant.content || '').trim();
+          const hasOpenTodos = session.surface !== 'chat'
+            && Array.isArray(todos)
+            && todos.some((t) => t && (t.status === 'pending' || t.status === 'in_progress'));
+          const asksQuestionOrBlocked = !textTrim
+            || /\?\s*$|need your|waiting for your|cannot proceed|blocked by|please (?:provide|confirm|clarify|share)|which option/i.test(textTrim);
+          const hitTokenLimit = result.finishReason === 'length';
+          const looksLikeMidTaskPause = session.surface !== 'chat'
+            && stepsLog.length > 0
+            && textTrim.length < 360
+            && !asksQuestionOrBlocked
+            && /\b(let me (?:now |next )?(?:check|read|inspect|edit|fix|run|update|verify|continue|finish)|i(?:'ll| will) (?:now |next )?(?:check|read|inspect|edit|fix|run|update|verify|continue|finish)|moving on to|next,? i(?:'ll| will))\b/i.test(textTrim);
+          const canAutoContinue = autoContinueCount < 4
+            && rounds < maxRounds
+            && !haltedByPermission
+            && !haltedByLoop
+            && !controller.signal.aborted
+            && session.provider !== 'simulator'
+            && session.provider !== 'claude'
+            && session.mode !== 'plan'
+            && (hitTokenLimit || (hasOpenTodos && !asksQuestionOrBlocked) || looksLikeMidTaskPause);
+          if (canAutoContinue) {
+            autoContinueCount += 1;
+            const nudge = hitTokenLimit
+              ? 'Your previous reply was cut off by the output token limit. Continue right where you left off and finish all remaining work.'
+              : hasOpenTodos
+                ? 'Continue executing the remaining pending/in_progress items in your todo list now without stopping until every task is completed or truly blocked.'
+                : 'Continue and finish the rest of the task now using tools — do not pause mid-work.';
+            emit({
+              type: 'status',
+              stage: 'continue',
+              message: hitTokenLimit ? 'Output hit token limit — continuing automatically…' : 'Continuing remaining tasks automatically…',
+            });
+            messages.push({
+              role: 'user',
+              hidden: true,
+              content: nudge,
+              id: `cont_${Date.now()}_${rounds}`,
+              createdAt: Date.now(),
+            });
+            continue;
+          }
+          break;
+        }
 
         const roundSig = assistant.toolCalls.map((c) => `${c.name}:${JSON.stringify(c.input || {})}`).join('|');
         if (roundSig && roundSig === lastRoundSig) {
@@ -1083,6 +1135,8 @@ class Engine {
     let sleepAttempt = 0;
     let rotationCount = 0;
     let switchCount = 0;
+    let stripImagesForTurn = false;
+    let triedVisionSwitch = false;
     const triedTargets = new Set();
 
     for (;;) {
@@ -1103,6 +1157,7 @@ class Engine {
           messages: conversation,
           tools: rawTools,
           compactToolSchemas: true,
+          stripImages: stripImagesForTurn,
           signal,
           onStatus: (status) => emit({ type: 'status', ...status }),
           onDelta: (delta) => {
@@ -1121,6 +1176,60 @@ class Engine {
         const status = Number(error.status || (String(error.message).match(/returned (\d{3})/) || [])[1] || 0);
         const isPlanRestrictedModel = status === 402 && /not part of the free tier/i.test(error.message);
         if (isPlanRestrictedModel) throw error;
+        const isImageUnsupported = (status === 400 || status === 404)
+          && /unsupported.*modalit|support image|image input|must be a string|cannot read.*image/i.test(error.message);
+        if (isImageUnsupported && !emitted) {
+          const hasRecentImage = conversation.slice(-3).some((m) => Array.isArray(m.attachments) && m.attachments.some((a) => a?.kind === 'image'));
+          const hasUnsignedToolCalls = messages.some((m) => m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.some((c) => !c.extraContent));
+          if (!triedVisionSwitch && hasRecentImage && switchCount < 6) {
+            triedVisionSwitch = true;
+            triedTargets.add(`${activeProviderId}:${activeModelId}`);
+            const VISION_CANDIDATES = [
+              { provider: 'gemini', model: 'gemini-3-flash-preview' },
+              { provider: 'nvidia', model: 'nvidia/nemotron-3.5-super-vl-120b-a12b' },
+              { provider: 'openrouter', model: 'nvidia/nemotron-3.5-super-vl:free' },
+              { provider: 'numes', model: 'moonshotai/kimi-k3.1-pro' },
+              { provider: 'coarena', model: 'gpt-6-luna' },
+            ];
+            const visionTarget = VISION_CANDIDATES.find((c) => {
+              if (triedTargets.has(`${c.provider}:${c.model}`)) return false;
+              if (c.provider === 'gemini' && hasUnsignedToolCalls) return false;
+              const p = this.pickKey(c.provider, c.model);
+              return p.poolSize > 0 && !p.allCooled;
+            });
+            if (visionTarget) {
+              switchCount += 1;
+              rotationCount = 0;
+              const prevLabel = `${provider.name} (${activeModelId})`;
+              activeProviderId = visionTarget.provider;
+              activeModelId = visionTarget.model;
+              if (target) {
+                target.provider = visionTarget.provider;
+                target.model = visionTarget.model;
+              }
+              emit({
+                type: 'status',
+                stage: 'fallback',
+                provider: visionTarget.provider,
+                model: visionTarget.model,
+                message: `${prevLabel} does not accept images — switched to ${PROVIDERS[visionTarget.provider].name} (${visionTarget.model})…`,
+              });
+              continue;
+            }
+          }
+          if (!stripImagesForTurn) {
+            stripImagesForTurn = true;
+            emit({
+              type: 'status',
+              stage: 'fallback',
+              message: `${provider.name} (${activeModelId}) is text-only — continuing with image attachments omitted…`,
+            });
+            continue;
+          }
+        }
+        const isEmptyCompletion = Boolean(error.emptyResponse);
+        const isNetworkFailure = !status
+          && /fetch failed|network|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(error.message);
         const isRateLimit = status === 429;
         const isKeyAuthOrQuota = isRateLimit || status === 401 || status === 402 || status === 403 || status === 404;
         const isNvidiaStall = activeProviderId === 'nvidia'
@@ -1130,20 +1239,21 @@ class Engine {
         const isNumesUnavailable = activeProviderId === 'numes'
           && (status === 408 || status === 503 || /did not respond within|stalled|no numes endpoint/i.test(error.message));
         const isCoarenaUnavailable = activeProviderId === 'coarena' && (status === 404 || status === 503 || isCoarenaStall);
-        const retryable = isRateLimit || status === 408 || status >= 500
-          || /fetch failed|network|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(error.message);
+        const retryable = isRateLimit || status === 408 || status >= 500 || isNetworkFailure;
         const fast = process.env.CAELIX_FAST_RETRY === '1';
 
-        if ((isKeyAuthOrQuota || isNvidiaStall || isCoarenaUnavailable || isNumesUnavailable) && !emitted) {
+        const shouldFailoverNetwork = isNetworkFailure && (switchCount > 0 || sleepAttempt >= 1);
+        if ((isKeyAuthOrQuota || isNvidiaStall || isCoarenaUnavailable || isNumesUnavailable || isEmptyCompletion || shouldFailoverNetwork) && !emitted) {
           const coolMs = fast ? 120 : (isRateLimit ? (error.retryAfterMs || 60_000) : 300_000);
           const scope = isRateLimit && MODEL_FAILOVER[activeProviderId] ? 'model' : 'key';
-          // A stall or single unavailable endpoint is a model problem, not a key problem: never cool the key down for it.
-          if (!isNvidiaStall && !isCoarenaUnavailable && !isNumesUnavailable && status !== 404) {
+          // A stall, empty completion, network drop, or single unavailable endpoint is a model/host problem, not a key problem: never cool the key down for it.
+          const isModelOnlyIssue = isNvidiaStall || isCoarenaUnavailable || isNumesUnavailable || isEmptyCompletion || isNetworkFailure || status === 404;
+          if (!isModelOnlyIssue) {
             this.markKeyCooldown(activeProviderId, picked.index, coolMs, activeModelId, scope);
           }
 
-          // Level 1: try another healthy key within the same provider first (not for model-wide 404 or a stall)
-          if (!isNvidiaStall && !isCoarenaUnavailable && !isNumesUnavailable && status !== 404 && pool.length > 1 && rotationCount < pool.length * 2) {
+          // Level 1: try another healthy key within the same provider first (not for model-wide issues or stalls)
+          if (!isModelOnlyIssue && pool.length > 1 && rotationCount < pool.length * 2) {
             const nextKey = this.pickKey(activeProviderId, activeModelId);
             if (!nextKey.allCooled) {
               rotationCount += 1;
@@ -1201,7 +1311,9 @@ class Engine {
                 stage: 'fallback',
                 provider: nextCandidate.provider,
                 model: nextCandidate.model,
-                message: `${prevLabel} hit ${status || 'limit'} — switched to ${PROVIDERS[nextCandidate.provider].name} (${nextCandidate.model}) so work continues…`,
+                message: isEmptyCompletion
+                  ? `${prevLabel} returned an empty response — switched to ${PROVIDERS[nextCandidate.provider].name} (${nextCandidate.model}) so work continues…`
+                  : `${prevLabel} hit ${status || 'limit'} — switched to ${PROVIDERS[nextCandidate.provider].name} (${nextCandidate.model}) so work continues…`,
               });
               continue;
             }

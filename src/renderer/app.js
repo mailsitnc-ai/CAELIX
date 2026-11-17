@@ -640,6 +640,10 @@ function renderTranscript() {
       continue;
     }
     if (message.role === 'assistant') {
+      const hasBody = Boolean(String(message.content || '').trim())
+        || (Array.isArray(message.toolCalls) && message.toolCalls.length > 0)
+        || Boolean(message.turnSummary);
+      if (!hasBody) continue;
       const node = document.createElement('div');
       node.className = 'msg assistant';
       const body = document.createElement('div');
@@ -1522,6 +1526,11 @@ function onChatEvent(event) {
         if (event.summary && !event.error) {
           appendTurnSummaryCard(event.summary, state.currentAssistant.body);
         }
+        const hasVisibleContent = Boolean(String(state.liveText || '').trim())
+          || Boolean(state.currentAssistant.hasTools)
+          || Boolean(event.summary && !event.error)
+          || Boolean(state.currentAssistant.body.querySelector('.tool-card, .turn-summary-card, .thinking-box'));
+        if (!hasVisibleContent) state.currentAssistant.node.remove();
       }
       {
         const tokens = event.usage?.total_tokens || event.estimatedTokens;
