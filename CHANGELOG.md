@@ -1,5 +1,13 @@
 # CAELIX changelog
 
+## 0.1.30 — Fix NVIDIA `multimodal` 400s and Gemini `function call turn` / unsigned-history 400s
+
+- **Match NVIDIA & vLLM/SGLang multimodal 400 errors (`src/engine/index.js`):** Expanded `isImageUnsupported` in `Engine.callKeyed()` to recognize `multimodal` / `enable-multimodal` / `image_url` / `vision` 400/404 rejections (`Received multimodal data but multimodal processing is not enabled…`) so CAELIX switches cleanly to a vision model or strips image attachments into text notes.
+- **Prevent Gemini `function call turn` & `thought_signature` 400s across existing chats (`src/engine/index.js`):**
+  - Updated `hasUnsignedToolCalls` in `Engine.callKeyed()` to inspect full `conversation` history (including prior saved turns in the chat) instead of only the current turn's `messages[]`, preventing text-to-vision image failover on Numes/Groq/NVIDIA from spilling prior unsigned tool chats into Gemini.
+  - Updated `sanitizeToolHistory()` and `buildConversation()` so leading non-`user` rows at the `-60` / token-compaction boundary are dropped cleanly and consecutive `assistant` -> `assistant(toolCalls)` turns can never reach strict validators.
+  - Added `isTurnOrderOrSignature400` failover in `Engine.callKeyed()` to recover onto OpenAI-compatible models (excluding Gemini) if a strict backend still rejects turn ordering or signatures.
+
 ## 0.1.29 — Eliminate blank `CAELIX` bubbles, clean poisoned chat history, handle image/text-only fallback, and auto-continue open tasks
 
 - **Fail over on empty `200 OK` SSE streams & inline SSE errors (`src/engine/providers.js`, `src/engine/index.js`):** Streaming responses that end with `0` visible characters and `0` tool calls (including empty `stop`/`length`/null-finish streams or reasoning-only completions) or carry inline SSE `payload.error` frames now raise structured `emptyResponse` / upstream errors instead of completing silently as blank `CAELIX` bubbles. `Engine.callKeyed()` immediately fails over to healthy sibling models or providers without penalizing valid API keys.

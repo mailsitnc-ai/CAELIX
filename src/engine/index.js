@@ -142,6 +142,18 @@ function sanitizeToolHistory(list) {
     if (msg.role === 'assistant') {
       const toolCalls = Array.isArray(msg.toolCalls) ? msg.toolCalls.filter((c) => c?.id && c?.name) : [];
       if (!toolCalls.length && !String(msg.content || '').trim()) continue;
+      const prev = out[out.length - 1];
+      if (prev && prev.role === 'assistant') {
+        if (!prev.toolCalls?.length && !toolCalls.length) {
+          prev.content = [prev.content, msg.content].filter(Boolean).join('\n\n');
+          continue;
+        }
+        if (toolCalls.length) {
+          out.push({ role: 'user', content: 'Continue.' });
+        }
+      } else if (!out.length && toolCalls.length) {
+        out.push({ role: 'user', content: 'Continue.' });
+      }
       const clone = { ...msg, toolCalls };
       out.push(clone);
       if (toolCalls.length) {
@@ -615,7 +627,7 @@ class Engine {
     const merged = [...this.activeMessages(session), ...(incoming || [])]
       .filter((message) => message && (message.role === 'user' || message.role === 'assistant' || message.role === 'tool'));
     let slice = merged.slice(-60);
-    while (slice.length && slice[0].role === 'tool') slice.shift();
+    while (slice.length && slice[0].role !== 'user') slice.shift();
     let history = sanitizeToolHistory(this.trimHistoryForContext(slice, session));
     const system = { role: 'system', content: this.systemPrompt(session) };
     let total = estimateTokens(system.content);
@@ -625,13 +637,14 @@ class Engine {
       const removed = history.shift();
       total -= estimateTokens(removed.content || '');
       dropped += 1;
-      while (history.length > 8 && history[0]?.role === 'tool') {
+      while (history.length > 8 && history[0]?.role !== 'user') {
         const extra = history.shift();
         total -= estimateTokens(extra.content || '');
         dropped += 1;
       }
     }
     history = sanitizeToolHistory(history);
+    while (history.length && history[0].role !== 'user') history.shift();
     if (dropped > 0) {
       history = [{
         role: 'user',
@@ -1177,23 +1190,32 @@ class Engine {
         const isPlanRestrictedModel = status === 402 && /not part of the free tier/i.test(error.message);
         if (isPlanRestrictedModel) throw error;
         const isImageUnsupported = (status === 400 || status === 404)
-          && /unsupported.*modalit|support image|image input|must be a string|cannot read.*image/i.test(error.message);
+          && /unsupported.*modalit|multimodal|enable-multimodal|support image|image input|image_url|vision|must be a string|cannot read.*image/i.test(error.message);
+        const hasTurnUnsignedToolCalls = messages.some((m) => m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.some((c) => !c.extraContent));
+        const hasAnyUnsignedToolCalls = conversation.some((m) => m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.some((c) => !c.extraContent));
         if (isImageUnsupported && !emitted) {
           const hasRecentImage = conversation.slice(-3).some((m) => Array.isArray(m.attachments) && m.attachments.some((a) => a?.kind === 'image'));
-          const hasUnsignedToolCalls = messages.some((m) => m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.some((c) => !c.extraContent));
           if (!triedVisionSwitch && hasRecentImage && switchCount < 6) {
             triedVisionSwitch = true;
             triedTargets.add(`${activeProviderId}:${activeModelId}`);
-            const VISION_CANDIDATES = [
-              { provider: 'gemini', model: 'gemini-3-flash-preview' },
-              { provider: 'nvidia', model: 'nvidia/nemotron-3.5-super-vl-120b-a12b' },
-              { provider: 'openrouter', model: 'nvidia/nemotron-3.5-super-vl:free' },
-              { provider: 'numes', model: 'moonshotai/kimi-k3.1-pro' },
-              { provider: 'coarena', model: 'gpt-6-luna' },
-            ];
+            const VISION_CANDIDATES = hasAnyUnsignedToolCalls
+              ? [
+                { provider: 'nvidia', model: 'nvidia/nemotron-3.5-super-vl-120b-a12b' },
+                { provider: 'openrouter', model: 'nvidia/nemotron-3.5-super-vl:free' },
+                { provider: 'numes', model: 'moonshotai/kimi-k3.1-pro' },
+                { provider: 'coarena', model: 'gpt-6-luna' },
+                { provider: 'gemini', model: 'gemini-3-flash-preview' },
+              ]
+              : [
+                { provider: 'gemini', model: 'gemini-3-flash-preview' },
+                { provider: 'nvidia', model: 'nvidia/nemotron-3.5-super-vl-120b-a12b' },
+                { provider: 'openrouter', model: 'nvidia/nemotron-3.5-super-vl:free' },
+                { provider: 'numes', model: 'moonshotai/kimi-k3.1-pro' },
+                { provider: 'coarena', model: 'gpt-6-luna' },
+              ];
             const visionTarget = VISION_CANDIDATES.find((c) => {
               if (triedTargets.has(`${c.provider}:${c.model}`)) return false;
-              if (c.provider === 'gemini' && hasUnsignedToolCalls) return false;
+              if (c.provider === 'gemini' && hasTurnUnsignedToolCalls) return false;
               const p = this.pickKey(c.provider, c.model);
               return p.poolSize > 0 && !p.allCooled;
             });
@@ -1227,6 +1249,8 @@ class Engine {
             continue;
           }
         }
+        const isTurnOrderOrSignature400 = status === 400
+          && /function call turn|thought_signature|missing a thought|invalid.*tool/i.test(error.message);
         const isEmptyCompletion = Boolean(error.emptyResponse);
         const isNetworkFailure = !status
           && /fetch failed|network|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(error.message);
@@ -1243,11 +1267,11 @@ class Engine {
         const fast = process.env.CAELIX_FAST_RETRY === '1';
 
         const shouldFailoverNetwork = isNetworkFailure && (switchCount > 0 || sleepAttempt >= 1);
-        if ((isKeyAuthOrQuota || isNvidiaStall || isCoarenaUnavailable || isNumesUnavailable || isEmptyCompletion || shouldFailoverNetwork) && !emitted) {
+        if ((isKeyAuthOrQuota || isNvidiaStall || isCoarenaUnavailable || isNumesUnavailable || isEmptyCompletion || isTurnOrderOrSignature400 || shouldFailoverNetwork) && !emitted) {
           const coolMs = fast ? 120 : (isRateLimit ? (error.retryAfterMs || 60_000) : 300_000);
           const scope = isRateLimit && MODEL_FAILOVER[activeProviderId] ? 'model' : 'key';
-          // A stall, empty completion, network drop, or single unavailable endpoint is a model/host problem, not a key problem: never cool the key down for it.
-          const isModelOnlyIssue = isNvidiaStall || isCoarenaUnavailable || isNumesUnavailable || isEmptyCompletion || isNetworkFailure || status === 404;
+          // A stall, empty completion, network drop, schema/turn-order quirk, or single unavailable endpoint is a model/host problem, not a key problem: never cool the key down for it.
+          const isModelOnlyIssue = isNvidiaStall || isCoarenaUnavailable || isNumesUnavailable || isEmptyCompletion || isTurnOrderOrSignature400 || isNetworkFailure || status === 404;
           if (!isModelOnlyIssue) {
             this.markKeyCooldown(activeProviderId, picked.index, coolMs, activeModelId, scope);
           }
@@ -1269,9 +1293,6 @@ class Engine {
           // Level 2 & 3: spill over to a higher-headroom sibling model or another saved provider
           triedTargets.add(`${activeProviderId}:${activeModelId}`);
           const candidates = this.listFailoverTargets(activeProviderId, activeModelId);
-          // Gemini rejects prior assistant tool_calls lacking Google thought_signature;
-          // avoid mid-turn spillover into Gemini once unsigned tool calls are in history.
-          const hasUnsignedToolCalls = messages.some((m) => m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.some((c) => !c.extraContent));
           // NVIDIA 404s and stalls are model-level: try the models verified to
           // serve this account class before spilling over to another provider.
           if (activeProviderId === 'nvidia' && (status === 404 || isNvidiaStall)) {
@@ -1292,7 +1313,7 @@ class Engine {
           if (switchCount < 6) {
             const nextCandidate = candidates.find((c) => {
               if (triedTargets.has(`${c.provider}:${c.model}`)) return false;
-              if (c.provider === 'gemini' && hasUnsignedToolCalls) return false;
+              if (c.provider === 'gemini' && (hasTurnUnsignedToolCalls || isTurnOrderOrSignature400)) return false;
               const p = this.pickKey(c.provider, c.model);
               return p.poolSize > 0 && !p.allCooled;
             });
