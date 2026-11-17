@@ -993,8 +993,27 @@ function auxiliaryModel(providerId, sessionModel) {
   return sessionModel || PROVIDERS[providerId]?.defaultModel || null;
 }
 
+// Team review is the opposite of auxiliary work: the checker must be able to
+// actually catch bugs, so it gets the strongest verified cross-family model
+// on that provider — never the lite/fast tier.
+const REVIEW_MODEL = {
+  gemini: 'gemini-3-flash-preview',
+  groq: 'openai/gpt-oss-120b',
+  nvidia: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
+  openrouter: 'nvidia/nemotron-3-ultra-550b-a55b:free',
+  numes: 'moonshotai/kimi-k3.1-pro',
+  coarena: 'gpt-6-luna',
+};
+
+function reviewerModel(providerId) {
+  const strong = REVIEW_MODEL[providerId];
+  const catalog = PROVIDERS[providerId]?.models || [];
+  if (strong && catalog.includes(strong)) return strong;
+  return PROVIDERS[providerId]?.defaultModel || null;
+}
+
 module.exports = {
   PROVIDERS, MODEL_NOTES, MODEL_FAILOVER, PROVIDER_SPILLOVER, PROVIDER_HIGH_HEADROOM, MODELS_ENDPOINTS,
-  MODEL_ROUTING, auxiliaryModel,
+  MODEL_ROUTING, auxiliaryModel, REVIEW_MODEL, reviewerModel,
   providerList, streamOpenAICompatible, testKey, fetchProviderModels, readError,
 };

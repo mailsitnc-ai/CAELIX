@@ -288,6 +288,14 @@ function renderChips() {
   const mode = MODES.find((item) => item.id === session.mode) || MODES[0];
   $('#mode-chip').textContent = mode.title;
   $('#composer-mode').textContent = mode.title;
+  const teamChip = $('#team-chip');
+  if (teamChip) {
+    teamChip.classList.toggle('active', Boolean(session.review));
+    teamChip.textContent = session.review ? 'Team ✓' : 'Team';
+    teamChip.title = session.review
+      ? 'Team review is ON — after edits, a second provider reviews and proves the work'
+      : 'Team review — after edits, a second provider reviews and proves the work';
+  }
   $('#model-chip').textContent = session.model || 'Model';
   $('#composer-model').textContent = session.model || 'Model';
   $('#project-name').textContent = displayProject(state.project || session.cwd);
@@ -1476,6 +1484,15 @@ function onChatEvent(event) {
       if (state.session) state.session.todos = event.items || [];
       renderTodos(event.items || []);
       break;
+    case 'steering-queued':
+      toast('Queued — CAELIX will apply your message mid-turn');
+      break;
+    case 'steering-applied':
+      toast('Steering applied to the running turn');
+      break;
+    case 'steering-flushed':
+      toast('Your queued message was kept for the next turn');
+      break;
     case 'context':
       state.contextReport = event.report;
       renderContext();
@@ -1817,10 +1834,15 @@ async function sendMessage() {
   state.attachments = [];
   renderAttachments();
   resizePrompt();
-  state.sendStartedAt = performance.now();
-  state.firstWordAt = null;
-  state.liveText = '';
-  state.currentAssistant = null;
+  // While a reply is already streaming this message is mid-turn steering:
+  // the running turn owns the live assistant bubble, so its streaming state
+  // must not be reset here.
+  if (!state.streaming) {
+    state.sendStartedAt = performance.now();
+    state.firstWordAt = null;
+    state.liveText = '';
+    state.currentAssistant = null;
+  }
   state.session.messages = state.session.messages || [];
   state.session.messages.push({ role: 'user', content: finalPrompt, attachments });
   const activeEntry = (state.sessions || []).find((item) => item.id === state.session.id);
@@ -2640,6 +2662,20 @@ function bind() {
     const menu = $('#mode-menu');
     menu.classList.toggle('hidden');
     if (!menu.classList.contains('hidden')) renderModeMenu();
+  });
+  $('#team-chip').addEventListener('click', async () => {
+    if (!state.session) return;
+    const next = !state.session.review;
+    state.session.review = next;
+    renderChips();
+    try {
+      await api.invoke('chat:set-review', { sessionId: state.session.id, value: next });
+      toast(next ? 'Team review ON — a second provider will check every edit.' : 'Team review off.');
+    } catch (error) {
+      state.session.review = !next;
+      renderChips();
+      appendError(error.message);
+    }
   });
   $('#composer-mode').addEventListener('click', (event) => {
     event.stopPropagation();

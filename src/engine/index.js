@@ -13,6 +13,7 @@ const {
   PROVIDER_SPILLOVER,
   PROVIDER_HIGH_HEADROOM,
   auxiliaryModel,
+  reviewerModel,
   streamOpenAICompatible,
 } = require('./providers');
 
@@ -1203,13 +1204,13 @@ class Engine {
       this.emit({ sessionId, type: 'status', stage: 'review', message: 'Team review skipped — save a key on a second provider to enable it.' });
       return null;
     }
-    const reviewerModel = auxiliaryModel(reviewerProvider, null);
+    const reviewerModelId = reviewerModel(reviewerProvider);
     const original = { provider: session.provider, model: session.model };
     const fileList = changes.map((item) => item.file).slice(0, 10).join(', ');
-    this.emit({ sessionId, type: 'status', stage: 'review', message: `Team review running on ${PROVIDERS[reviewerProvider].name} · ${reviewerModel}…` });
+    this.emit({ sessionId, type: 'status', stage: 'review', message: `Team review running on ${PROVIDERS[reviewerProvider].name} · ${reviewerModelId}…` });
     try {
       session.provider = reviewerProvider;
-      session.model = reviewerModel;
+      session.model = reviewerModelId;
       await this.send(sessionId, `[Team review] Another agent just made these edits for the task: ${task.slice(0, 400)}. Changed files: ${fileList}. Review the work with fresh eyes — verify it against the task, fix any bug you find, run the code to prove it works, then give a one-paragraph verdict.`, [], { reviewRun: true });
     } finally {
       session.provider = original.provider;
@@ -1419,8 +1420,24 @@ class Engine {
           }
         }
 
-        const maxAttempts = isRateLimit ? 5 : 2;
-        if (!retryable || error.noRetry || emitted || sleepAttempt >= maxAttempts) throw error;
+        // A hard-quota 429 ("You exceeded your current quota ... billing
+        // details") does not clear in seconds. With one key and no
+        // cross-provider escape, further retries only burn wall-clock time, so
+        // fail fast with a clear error instead of retrying the same dead key
+        // five times. Transient rate limits (plain "rate limit") still retry.
+        const hardQuota429 = isRateLimit && /exceeded your current quota|insufficient_quota|billing details/i.test(error.message);
+        const quotaEscape = hardQuota429
+          && pool.length <= 1
+          && !this.listFailoverTargets(activeProviderId, activeModelId)
+            .some((t) => t.provider !== activeProviderId);
+        const maxAttempts = isRateLimit ? (quotaEscape ? 1 : 5) : 2;
+        if (!retryable || error.noRetry || emitted || sleepAttempt >= maxAttempts) {
+          if (quotaEscape && isRateLimit && !error.noRetry) {
+            error.noRetry = true;
+            error.message = `${provider?.name || activeProviderId} free-tier quota is exhausted and no other provider key is saved. Add a key on another provider in Keys, or wait for the quota to reset.`;
+          }
+          throw error;
+        }
         sleepAttempt += 1;
         const defaultWait = isRateLimit ? Math.min(45_000, 2000 * 2 ** (sleepAttempt - 1)) : 600 * 2 ** (sleepAttempt - 1);
         const waitMs = fast ? 120 : (error.retryAfterMs || defaultWait);
@@ -1472,6 +1489,9 @@ class Engine {
       if (!pool.length) throw new Error(`No ${provider.name} key is saved.`);
       const agentTools = toolDefinitions(session.cwd)
         .filter((tool) => allowedSet.has(tool.name));
+      // Read-only research runs on the provider's fast auxiliary model so the
+      // chat's heavy model is not spent on file reading and grepping.
+      const subModel = profile.readonly ? auxiliaryModel(session.provider, session.model) : session.model;
       const conversation = [
         { role: 'system', content: `${profile.prompt}\nWork strictly inside ${session.cwd}. Allowed tools: ${agentTools.map((t) => t.name).join(', ')}.` },
         { role: 'user', content: task },
@@ -1485,7 +1505,7 @@ class Engine {
           try {
             result = await streamOpenAICompatible({
               provider: session.provider,
-              model: session.model,
+              model: subModel,
               apiKey: picked.key,
               messages: conversation,
               tools: agentTools,
@@ -2213,7 +2233,7 @@ class Engine {
             content: `User: ${snippetUser}${snippetAssistant ? `\n\nAssistant: ${snippetAssistant}` : ''}`,
           },
         ];
-        const candidates = [{ provider: session.provider, model: session.model }];
+        const candidates = [{ provider: session.provider, model: auxiliaryModel(session.provider, session.model) }];
         for (const fallbackProvider of ['groq', 'gemini', 'openrouter', 'nvidia']) {
           if (fallbackProvider === session.provider) continue;
           const fallbackModel = PROVIDERS[fallbackProvider]?.defaultModel;
@@ -2262,6 +2282,14 @@ class Engine {
     } catch {
       return null;
     }
+  }
+
+  // Team review toggle for a chat. Persisted on the session like mode.
+  setReview(sessionId, value) {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error('No active chat.');
+    this.sessions.update(sessionId, { review: Boolean(value) });
+    return { sessionId, review: Boolean(value) };
   }
 
   terminalTabs(sessionId) {

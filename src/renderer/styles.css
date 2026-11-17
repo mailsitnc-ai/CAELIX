@@ -173,6 +173,7 @@ button { cursor: pointer; }
   white-space: nowrap;
 }
 .mini-chip:hover { background: var(--bg-3); color: var(--text-2); }
+.mini-chip.active { background: var(--bg-3); color: var(--text-1); border-color: var(--line-strong, var(--text-3)); }
 .mini-chip.model { max-width: 190px; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); }
 
 .chip-wrap { position: relative; }

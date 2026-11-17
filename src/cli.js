@@ -168,7 +168,19 @@ async function run(args) {
       return session;
     },
   };
-  const keys = { get: (id) => envKey(id) };
+  // Mirrors KeyStore's contract (get/list/status) so engine features that
+  // probe the key store — cross-provider spillover, failover, team review —
+  // work headless too. Masks only in status; raw keys never leave `get`.
+  const keys = {
+    get: (id) => envKey(id),
+    list: (id) => {
+      const single = envKey(id);
+      return single ? [single] : [];
+    },
+    status: () => Object.entries(KEY_ENV)
+      .filter(([provider]) => envKey(provider))
+      .map(([provider]) => ({ provider, configured: true, count: 1, masked: `${'•'.repeat(8)}${envKey(provider).slice(-4)}` })),
+  };
   const { Engine } = require('./engine');
   const { McpManager } = require('./engine/mcp');
   const { HooksManager } = require('./engine/hooks');

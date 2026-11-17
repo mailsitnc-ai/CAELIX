@@ -603,8 +603,11 @@ function registerIpc() {
     return folder;
   });
 
-  ipcMain.handle('chat:send', async (_event, { sessionId, text, attachments } = {}) => {
-    const session = sessions.get(sessionId);
+  ipcMain.handle('chat:set-review', (_event, { sessionId, value } = {}) => {
+    return engine.setReview(sessionId, value);
+  });
+
+  ipcMain.handle('chat:send', async (_event, { sessionId, text, attachments } = {}) => {    const session = sessions.get(sessionId);
     if (!session) throw new Error('No such chat.');
     const dispatch = () => engine.send(sessionId, text, attachments).catch((error) => {
       emit({ type: 'error', message: error.message });
