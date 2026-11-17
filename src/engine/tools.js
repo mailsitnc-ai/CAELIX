@@ -7,6 +7,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { diffLines } = require('./diff');
+const { diagnose } = require('./diagnostics');
 
 const MAX_OUTPUT = 60_000;
 const READ_FILE_DEFAULT_LINES = 300;
@@ -521,7 +522,7 @@ class ToolRunner {
       additions: diff.additions,
       deletions: diff.deletions,
     });
-    return { output: `Wrote ${relative} (${diff.additions} added, ${diff.deletions} removed).`, change: { file: relative, before, after, existed, ...diff } };
+    return { output: `Wrote ${relative} (${diff.additions} added, ${diff.deletions} removed).${diagnose(this.root, [file])}`, change: { file: relative, before, after, existed, ...diff } };
   }
 
   async editFile(input) {
@@ -554,7 +555,7 @@ class ToolRunner {
       additions: diff.additions,
       deletions: diff.deletions,
     });
-    return { output: `Edited ${relative} (${diff.additions} added, ${diff.deletions} removed).`, change: { file: relative, before, after, existed: true, ...diff } };
+    return { output: `Edited ${relative} (${diff.additions} added, ${diff.deletions} removed).${diagnose(this.root, [file])}`, change: { file: relative, before, after, existed: true, ...diff } };
   }
 
   async multiEdit(input) {
@@ -608,7 +609,7 @@ class ToolRunner {
       });
       summary.push(`${relative} (+${diff.additions} −${diff.deletions})`);
     }
-    return { output: `Edited ${summary.join(', ')}.`, meta: { files: changed.length } };
+    return { output: `Edited ${summary.join(', ')}.${diagnose(this.root, changed.map((item) => item.file))}`, meta: { files: changed.length } };
   }
 
   async listDir(input) {

@@ -12,6 +12,7 @@ const {
   MODEL_FAILOVER,
   PROVIDER_SPILLOVER,
   PROVIDER_HIGH_HEADROOM,
+  auxiliaryModel,
   streamOpenAICompatible,
 } = require('./providers');
 
@@ -299,6 +300,7 @@ class Engine {
     this.checkpoints = options.checkpointDir ? new CheckpointStore(options.checkpointDir) : null;
     this.terminals = new TerminalManager((event) => this.emit(event));
     this.controllers = new Map();
+    this.steeringQueues = new Map();
     this.allowances = new Map();
     this.loadedMcpTools = new Map();
     this.keyCursor = new Map();
@@ -657,7 +659,16 @@ class Engine {
   async send(sessionId, text, attachments = [], options = {}) {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error('That chat no longer exists.');
-    if (this.controllers.has(sessionId)) throw new Error('A reply is already running in this chat.');
+    // Mid-turn steering: a message that arrives while a reply is running is
+    // queued and injected into the running turn at the next round boundary,
+    // instead of being rejected.
+    if (this.controllers.has(sessionId)) {
+      const queue = this.steeringQueues.get(sessionId) || [];
+      queue.push({ text: String(text || ''), attachments });
+      this.steeringQueues.set(sessionId, queue);
+      this.emit({ sessionId, type: 'steering-queued', text: String(text || '').slice(0, 200) });
+      return { queued: true };
+    }
     const hadPriorMessages = Array.isArray(session.messages) && session.messages.length > 0;
     const provisionalTitle = options?.provisionalTitle ? String(options.provisionalTitle) : null;
     const controller = new AbortController();
@@ -686,6 +697,7 @@ class Engine {
 
     const stepsLog = [];
     let interactivePermissionDenied = false;
+    let turnOk = false;
 
     const emit = (event) => this.emit({ sessionId, ...event });
     const runner = new ToolRunner({
@@ -761,6 +773,20 @@ class Engine {
       let autoContinueCount = 0;
       while (rounds < maxRounds) {
         if (controller.signal.aborted) throw new Error('Cancelled.');
+        // Mid-turn steering: user corrections queued while this turn was
+        // running are injected here, so the model sees them before its next
+        // round instead of the message being rejected outright.
+        const steering = (this.steeringQueues.get(sessionId) || []).splice(0);
+        for (const item of steering) {
+          messages.push({
+            role: 'user',
+            content: `[User steering, sent mid-turn] ${item.text}`,
+            id: `steer_${Date.now()}_${rounds}`,
+            createdAt: Date.now(),
+            attachments: item.attachments,
+          });
+          emit({ type: 'steering-applied', text: item.text });
+        }
         rounds += 1;
         const mcpState = this.resolveMcpToolsForTurn(session, allMcpTools);
         let result;
@@ -1112,6 +1138,7 @@ class Engine {
           autoReset = null;
         }
       }
+      turnOk = true;
       return { ok: true, summary, autoReset };
     } catch (error) {
       const wasCancelled = controller.signal.aborted || /Cancelled\./i.test(error.message);
@@ -1137,7 +1164,58 @@ class Engine {
       return { ok: false, error: error.message, summary };
     } finally {
       this.controllers.delete(sessionId);
+      // Any steering queued during the final round never got injected —
+      // persist it so the user's words are never silently dropped.
+      const leftovers = (this.steeringQueues.get(sessionId) || []).splice(0);
+      if (leftovers.length && typeof this.sessions.appendMessage === 'function') {
+        for (const item of leftovers) {
+          this.sessions.appendMessage(sessionId, {
+            role: 'user',
+            content: item.text,
+            id: `steer_${Date.now()}`,
+            createdAt: Date.now(),
+            attachments: item.attachments,
+          });
+        }
+        this.emit({ sessionId, type: 'steering-flushed', count: leftovers.length });
+      }
+      this.steeringQueues.delete(sessionId);
+      // Team review (Antigravity audit item + bench-proven): a second brain
+      // from a different provider family reviews the edits with fresh eyes.
+      if (turnOk && !options?.reviewRun && session.review === true && changes.length && !controller.signal.aborted) {
+        try {
+          await this.runTeamReview(sessionId, { task: String(text || ''), changes });
+        } catch { /* a failed review never fails the original turn */ }
+      }
     }
+  }
+
+  // Team mode: hand the just-finished turn's work to an independent model —
+  // always a different provider family than the chat's own — which verifies,
+  // fixes and proves it. Solo free models measurably miss bugs this catches.
+  async runTeamReview(sessionId, { task, changes }) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return null;
+    const reviewerProvider = PROVIDER_SPILLOVER.find(
+      (candidate) => candidate !== session.provider && this.getKeyPool(candidate).length,
+    );
+    if (!reviewerProvider) {
+      this.emit({ sessionId, type: 'status', stage: 'review', message: 'Team review skipped — save a key on a second provider to enable it.' });
+      return null;
+    }
+    const reviewerModel = auxiliaryModel(reviewerProvider, null);
+    const original = { provider: session.provider, model: session.model };
+    const fileList = changes.map((item) => item.file).slice(0, 10).join(', ');
+    this.emit({ sessionId, type: 'status', stage: 'review', message: `Team review running on ${PROVIDERS[reviewerProvider].name} · ${reviewerModel}…` });
+    try {
+      session.provider = reviewerProvider;
+      session.model = reviewerModel;
+      await this.send(sessionId, `[Team review] Another agent just made these edits for the task: ${task.slice(0, 400)}. Changed files: ${fileList}. Review the work with fresh eyes — verify it against the task, fix any bug you find, run the code to prove it works, then give a one-paragraph verdict.`, [], { reviewRun: true });
+    } finally {
+      session.provider = original.provider;
+      session.model = original.model;
+    }
+    return true;
   }
 
   async callKeyed({ session, messages, extraTools = [], disableTools = false, target = null, emit, signal }) {

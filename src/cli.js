@@ -142,6 +142,7 @@ async function run(args) {
     provider: providerId,
     model,
     mode,
+    review: Boolean(args.review),
     messages: [],
     changes: [],
     terminal: [],
@@ -241,6 +242,7 @@ function help() {
   console.log('       --provider NAME   gemini | openrouter | nvidia | groq | coarena | numes | claude | simulator');
   console.log('       --model ID        any model id, or the provider default');
   console.log('       --mode MODE       ask | accept | plan | bypass');
+  console.log('       --review          after edits, a second provider reviews and proves the work (team mode)');
   console.log('       --json            one JSON event per line');
   console.log('       --yes             allow permission prompts in a headless run');
   console.log('  caelix tools           list the tools the harness can use');

@@ -1788,7 +1788,9 @@ async function sendMessage() {
   const prompt = $('#prompt');
   const text = prompt.value.trim();
   const attachments = state.attachments.slice();
-  if ((!text && !attachments.length) || state.streaming || !state.session) return;
+  // While a reply is streaming the engine queues the message as mid-turn
+  // steering instead of rejecting it, so sending stays possible.
+  if ((!text && !attachments.length) || !state.session) return;
   if (text.startsWith('/') && !attachments.length) {
     hideCommands();
     hideMentions();

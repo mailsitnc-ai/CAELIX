@@ -971,7 +971,30 @@ async function fetchProviderModels(provider, apiKey) {
   }
 }
 
+// Tiered routing (Antigravity audit item #1): cheap, fast, high-quota models
+// handle auxiliary work — read-only research subagents and chat titles — so
+// the chat's heavy model is reserved for planning, coding edits and final
+// answers. Mirrors how Claude spends flagship tokens only where they matter.
+const MODEL_ROUTING = {
+  gemini: 'gemini-3.5-flash-lite',
+  groq: 'qwen/qwen3.8-27b',
+  nvidia: 'nvidia/nemotron-3.5-lightning-30b-a3b',
+  openrouter: 'openrouter/free',
+  coarena: 'gemini-3-8-flash',
+  numes: 'z-ai/glm-5.3',
+};
+
+// The auxiliary model for a provider, or the session model when no cheaper
+// verified option exists (simulator/claude/omniroute have no routing entry).
+function auxiliaryModel(providerId, sessionModel) {
+  const fast = MODEL_ROUTING[providerId];
+  const catalog = PROVIDERS[providerId]?.models || [];
+  if (fast && catalog.includes(fast) && fast !== sessionModel) return fast;
+  return sessionModel || PROVIDERS[providerId]?.defaultModel || null;
+}
+
 module.exports = {
   PROVIDERS, MODEL_NOTES, MODEL_FAILOVER, PROVIDER_SPILLOVER, PROVIDER_HIGH_HEADROOM, MODELS_ENDPOINTS,
+  MODEL_ROUTING, auxiliaryModel,
   providerList, streamOpenAICompatible, testKey, fetchProviderModels, readError,
 };
