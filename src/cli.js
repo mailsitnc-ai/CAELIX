@@ -177,9 +177,14 @@ async function run(args) {
       const single = envKey(id);
       return single ? [single] : [];
     },
-    status: () => Object.entries(KEY_ENV)
-      .filter(([provider]) => envKey(provider))
-      .map(([provider]) => ({ provider, configured: true, count: 1, masked: `${'•'.repeat(8)}${envKey(provider).slice(-4)}` })),
+    status: () => [
+      ...Object.entries(KEY_ENV)
+        .filter(([provider]) => envKey(provider))
+        .map(([provider]) => ({ provider, configured: true, count: 1, masked: `${'•'.repeat(8)}${envKey(provider).slice(-4)}` })),
+      // Kilo's free tier works anonymously, so it is always a live fallback
+      // lane for spillover — even headless with zero env keys.
+      { provider: 'kilo', configured: true, count: 1, masked: 'anonymous (no key needed)' },
+    ],
   };
   const { Engine } = require('./engine');
   const { McpManager } = require('./engine/mcp');

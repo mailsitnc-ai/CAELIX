@@ -107,6 +107,33 @@ const PROVIDERS = {
     defaultModel: 'gpt-6-luna',
     color: '#06b6d4',
   },
+  kilo: {
+    id: 'kilo',
+    name: 'Kilo Gateway',
+    keyLabel: 'Kilo API key (optional — works without one)',
+    consoleUrl: 'https://kilo.ai/models',
+    baseUrl: 'https://ai-gateway.kilo.ai/api/v1/chat/completions',
+    // Curated free rows verified live on 2026-11-18 (catalog: ai-gateway.kilo.ai,
+    // no auth required). All advertise tool calling; the Nemotron rows carry
+    // 1M-token windows. The live refresh keeps this list current.
+    models: [
+      'nvidia/nemotron-3.5-super-vl:free',
+      'nvidia/nemotron-3.5-lightning:free',
+      'nvidia/nemotron-3-ultra-550b-a55b:free',
+      'baidu/ernie-5.5-flash-preview:free',
+      'particle-ai/particle-1:free',
+      'dots-studio/dots-3-note-preview:free',
+      'cohere/north-mini-code:free',
+      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+      'kilo-auto/free',
+    ],
+    defaultModel: 'nvidia/nemotron-3.5-super-vl:free',
+    // Anonymous access: the gateway serves free models without any key
+    // (docs: 200 requests/hour per IP). A saved key is optional and only
+    // raises the limits.
+    anonymous: true,
+    color: '#22d3ee',
+  },
   numes: {
     id: 'numes',
     name: 'Numes',
@@ -272,17 +299,21 @@ const MODEL_FAILOVER = {
   groq: ['openai/gpt-oss-20b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-120b'],
   openrouter: ['openrouter/free', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'nvidia/nemotron-3.5-super-vl:free', 'nvidia/nemotron-3.5-lightning:free', 'baidu/ernie-5.5-flash-preview:free'],
   coarena: ['gpt-6-luna', 'gemini-3-8-flash', 'deepseek-v4-1-flash-1017'],
+  kilo: ['nvidia/nemotron-3.5-super-vl:free', 'nvidia/nemotron-3.5-lightning:free', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'baidu/ernie-5.5-flash-preview:free', 'kilo-auto/free'],
   numes: ['deepseek/deepseek-v4.1-flash:free', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'z-ai/glm-5.3-flash:free', 'moonshotai/kimi-k3.1-pro:free'],
 };
 
 // Order when spilling over across different providers that have saved keys.
-const PROVIDER_SPILLOVER = ['gemini', 'nvidia', 'openrouter', 'numes', 'groq'];
+// Kilo sits last: it is always available (anonymous), so it must never shadow
+// a provider the user actually saved a key for.
+const PROVIDER_SPILLOVER = ['gemini', 'nvidia', 'openrouter', 'numes', 'groq', 'kilo'];
 const PROVIDER_HIGH_HEADROOM = {
   gemini: 'gemini-3.5-flash-lite',
   nvidia: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
   openrouter: 'openrouter/free',
   numes: 'deepseek/deepseek-v4.1-flash:free',
   groq: 'qwen/qwen3.8-27b',
+  kilo: 'nvidia/nemotron-3.5-lightning:free',
 };
 
 function providerList(selfcheck) {
@@ -296,6 +327,7 @@ function providerList(selfcheck) {
       models: provider.models,
       defaultModel: provider.defaultModel,
       keyless: Boolean(provider.keyless),
+      anonymous: Boolean(provider.anonymous),
       color: provider.color,
       modelNotes: MODEL_NOTES,
     }));
@@ -508,8 +540,11 @@ async function streamOpenAICompatible(options) {
 
   const headers = {
     'content-type': 'application/json',
-    authorization: `Bearer ${apiKey}`,
   };
+  // Anonymous gateways (Kilo free tier) are probed with the placeholder key
+  // 'anonymous' — sending a bogus Bearer token could get the request
+  // rejected, so no Authorization header goes out for it.
+  if (apiKey && apiKey !== 'anonymous') headers.authorization = `Bearer ${apiKey}`;
   if (provider === 'openrouter') {
     headers['HTTP-Referer'] = 'https://caelix.local';
     headers['X-Title'] = 'CAELIX';
@@ -894,6 +929,7 @@ const MODELS_ENDPOINTS = {
   nvidia: 'https://integrate.api.nvidia.com/v1/models',
   groq: 'https://api.groq.com/openai/v1/models',
   coarena: 'https://coarena.ai/api/v1/models',
+  kilo: 'https://ai-gateway.kilo.ai/api/v1/models',
   omniroute: 'http://localhost:20128/v1/models',
   // Tool-capable text models, cheapest first — free $0 rows sort to the top.
   numes: 'https://api.numes.ai/api/v1/models?output_modalities=text&supported_parameters=tools&sort=pricing-low-to-high',
@@ -929,6 +965,14 @@ function filterLiveProviderRow(provider, item) {
   if (provider === 'coarena') {
     if (item?.lifecycle && item.lifecycle !== 'active') return false;
     return COARENA_TEST_FALLBACKS.includes(id) || isClaudeId(id);
+  }
+  if (provider === 'kilo') {
+    // Kilo's free catalog: keep only rows the gateway serves at no cost and
+    // that can drive tools (the whole point of a coding agent).
+    const isFree = Boolean(item?.isFree) || id.endsWith(':free') || id === 'kilo-auto/free' || id === 'openrouter/free';
+    if (!isFree) return false;
+    if (Array.isArray(item?.supported_parameters) && !item.supported_parameters.includes('tools')) return false;
+    return true;
   }
   if (provider === 'numes') {
     if (isClaudeId(id)) return true;
@@ -1012,6 +1056,7 @@ const MODEL_ROUTING = {
   nvidia: 'nvidia/nemotron-3.5-lightning-30b-a3b',
   openrouter: 'openrouter/free',
   coarena: 'gemini-3-8-flash',
+  kilo: 'nvidia/nemotron-3.5-lightning:free',
   numes: 'deepseek/deepseek-v4.1-flash:free',
 };
 
@@ -1034,6 +1079,7 @@ const REVIEW_MODEL = {
   openrouter: 'nvidia/nemotron-3-ultra-550b-a55b:free',
   numes: 'nvidia/nemotron-3-ultra-550b-a55b:free',
   coarena: 'gpt-6-luna',
+  kilo: 'nvidia/nemotron-3-ultra-550b-a55b:free',
 };
 
 function reviewerModel(providerId) {

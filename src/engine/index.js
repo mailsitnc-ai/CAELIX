@@ -376,11 +376,15 @@ class Engine {
   }
 
   getKeyPool(providerId) {
-    if (!this.keys) return [];
+    if (!this.keys) return PROVIDERS[providerId]?.anonymous ? ['anonymous'] : [];
     const list = typeof this.keys.list === 'function' ? this.keys.list(providerId) : [];
     if (Array.isArray(list) && list.length) return list;
     const single = typeof this.keys.get === 'function' ? this.keys.get(providerId) : null;
-    return single ? [single] : [];
+    if (single) return [single];
+    // Anonymous providers (Kilo free tier) work without any saved key: hand
+    // back a placeholder so failover, cooldowns and team review treat the
+    // provider as available. The placeholder is never sent as an auth header.
+    return PROVIDERS[providerId]?.anonymous ? ['anonymous'] : [];
   }
 
   keyCooldownUntil(providerId, idx, model = null) {

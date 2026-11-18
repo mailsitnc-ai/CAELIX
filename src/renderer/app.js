@@ -338,7 +338,7 @@ function renderComposerState() {
   if (!session || !warning || !sendBtn) return;
   const provider = state.providers.find((item) => item.id === session.provider);
   const keyInfo = state.keys.find((item) => item.id === session.provider);
-  const missingKey = Boolean(provider && !provider.keyless && (!keyInfo || !keyInfo.configured));
+  const missingKey = Boolean(provider && !provider.keyless && !provider.anonymous && (!keyInfo || !keyInfo.configured));
   const missingModel = !session.model;
   if (missingKey) {
     $('#key-warning-text').textContent = `Add a ${provider.name} key in Keys or pick a keyless model to send.`;
@@ -957,7 +957,7 @@ function renderKeys() {
         <span class="key-dot" style="background:${provider.color}"></span>
         <span class="key-name">${escapeHtml(provider.name)}</span>
         ${provider.consoleUrl ? `<a class="key-link" href="${provider.consoleUrl}" target="_blank" rel="noreferrer">Get a key</a>` : ''}
-        <span class="key-state ${configured ? 'saved' : ''}" id="key-status-${provider.id}">${configured ? `Saved ${provider.masked}` : provider.keyless ? 'No key needed' : 'Not saved'}</span>
+        <span class="key-state ${configured ? 'saved' : ''}" id="key-status-${provider.id}">${configured ? `Saved ${provider.masked}` : provider.keyless ? 'No key needed' : provider.anonymous ? 'Works without a key' : 'Not saved'}</span>
       </div>
       ${provider.keyless ? '' : `
       <div class="key-input-row">
@@ -2216,7 +2216,7 @@ async function saveMemory() {
 function syncProviderCatalogs(onlyPid = null) {
   const targets = onlyPid
     ? [onlyPid, ...(onlyPid !== 'nvidia' ? ['nvidia'] : [])]
-    : state.providers.filter((p) => !p.keyless && (p.id === 'nvidia' || p.id === 'coarena' || state.keys.some((k) => k.id === p.id && k.configured))).map((p) => p.id);
+    : state.providers.filter((p) => !p.keyless && (p.id === 'nvidia' || p.id === 'coarena' || p.anonymous || state.keys.some((k) => k.id === p.id && k.configured))).map((p) => p.id);
   return Promise.allSettled(targets.map(async (pid) => {
     const res = await api.invoke('providers:refresh', { provider: pid });
     const target = state.providers.find((item) => item.id === pid);
