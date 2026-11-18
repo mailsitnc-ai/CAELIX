@@ -1,5 +1,18 @@
 # CAELIX changelog
 
+## 0.1.43 — Liquid glass depth, perceptible colour & automatic visual finish gate
+
+- **Fixed false-positive `100/100` on flat/pitch-black pages (`src/engine/design.js`):**
+  - Audited `v0.1.42`'s own generated `checks/design-after/index.html` and caught why CAELIX could still pass an underwhelming dark page: `body` used pitch-black `#000208`, `.glass-panel` paired `backdrop-filter: blur(20px)` with a `98%`-opaque card (`rgba(0, 2, 8, 0.98)`), borders were `2%` invisible white (`0.02`), the panel had zero `box-shadow`/highlight, and `@media (prefers-reduced-motion)` satisfied `responsive` with zero layout breakpoints.
+  - Added per-selector `backdrop-filter` verification (`translucentGlassSelectors` vs `opaqueGlassSelectors`) so any glass element with `> 72%` fill opacity fails `glass`/`liquid` and tells the model to drop card opacity to `0.06–0.28`.
+  - Added explicit `"liquid"` goal evaluation (validating `blur >= 12px` on translucent surfaces, visible glass borders `>= 0.08` alpha, `box-shadow` depth, and layered gradient backdrops behind the glass).
+  - Replaced `toHsl()` low-channel-noise loopholes with perceptible sRGB chroma checks (`effectiveChroma >= 14`) and required canvas-level colour when paired with dark/light/liquid/glass briefs — pitch-black `#000208` + one blue accent button no longer satisfies `"dark blue"`.
+  - Separated `responsiveMediaQueries` (`max-width`/`min-width`/orientation/aspect-ratio) from `@media (prefers-reduced-motion)`, and fixed stacked CSS `background` contrast checks to measure against the opaque base canvas rather than a semi-transparent top radial glow.
+- **Prompt goal propagation & automatic visual finish gate (`src/engine/tools.js`, `src/engine/index.js`):**
+  - Added `extractDesignGoals(text)` so visual words (`dark`, `blue`, `liquid`, `glass`, etc.) from the user's prompt automatically flow into every `write_file`/`edit_file`/`multi_edit` `designHint()` and `design_check` call.
+  - Upgraded `systemPrompt()` with layered deep-navy/sapphire ambient-orb backdrops, true frosted glass recipes, specular highlights, interactive control polish, and dual `@media` requirements.
+  - Added `unresolvedDesign` auto-continue enforcement in `Engine.send()` so CAELIX refuses to stop when edited HTML/CSS fails its visual brief or craft checks, nudging concrete fixes until `design_check` passes.
+
 ## 0.1.42 — CAELIX now follows a visual brief, and proves it
 
 - **The cause was in CAELIX, not the prompt.** A front-end task was handed to the model with no design contract at all: the system prompt (8.5k characters) contained no instruction about colour, CSS, materials, typography or layout, and there was no way to check the result. Asked for "dark blue and liquid glass", a free model produced a near-black page with flat teal-bordered boxes — dark, but neither blue nor glass. Reproduced here with the same model and the same prompt: `backdrop-filter: var(--glass-blur)` where the token was a bare `20px`, which is invalid CSS the browser discards, so nothing was blurred. That is a harness gap, and it is now closed.

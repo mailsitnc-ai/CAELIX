@@ -291,6 +291,15 @@ function checkDesign(source, { file = 'index.html', goals = [] } = {}) {
   };
   for (const declaration of declarations) declaration.value = resolveVars(declaration.value);
 
+  // Group resolved declarations by selector so glass checks verify the SAME
+  // element's backdrop-filter, fill opacity, hairline border, and shadow.
+  const selectorMap = new Map();
+  for (const declaration of declarations) {
+    const key = declaration.selector || '';
+    if (!selectorMap.has(key)) selectorMap.set(key, []);
+    selectorMap.get(key).push(declaration);
+  }
+
   const metrics = {
     bytes: source.length,
     cssBytes: css.length,
@@ -300,6 +309,8 @@ function checkDesign(source, { file = 'index.html', goals = [] } = {}) {
     focusVisibleRules: new Set(declarations.filter((d) => /:focus(-visible)?/.test(d.selector)).map((d) => d.selector)).size,
     activeRules: new Set(declarations.filter((d) => /:active/.test(d.selector)).map((d) => d.selector)).size,
     mediaQueries: (css.match(/@media\b/g) || []).length,
+    responsiveMediaQueries: [...css.matchAll(/@media\s*([^{]+)\{/gi)]
+      .filter((m) => /\b(max|min)-(device-)?(width|height)\b|orientation|aspect-ratio/i.test(m[1])).length,
     transitions: declarations.filter((d) => d.property === 'transition' || d.property === 'transition-property').length,
     animations: (css.match(/@keyframes\b/g) || []).length,
     // A filter must name a function: `backdrop-filter: 20px` is invalid CSS and
@@ -308,6 +319,7 @@ function checkDesign(source, { file = 'index.html', goals = [] } = {}) {
       && /\b(blur|saturate|brightness|contrast|grayscale|sepia|hue-rotate|invert|opacity|drop-shadow)\(/.test(d.value)),
     gradients: (css.match(/(linear|radial|conic)-gradient\(/g) || []).length,
     shadows: declarations.filter((d) => d.property === 'box-shadow').length,
+    insetHighlights: declarations.filter((d) => d.property === 'box-shadow' && /\binset\b/i.test(d.value)).length,
     flex: declarations.filter((d) => d.property === 'display' && /flex/.test(d.value)).length,
     grid: declarations.filter((d) => d.property === 'display' && /grid/.test(d.value)).length,
     fonts: '',
@@ -326,17 +338,20 @@ function checkDesign(source, { file = 'index.html', goals = [] } = {}) {
     .map((match) => Number(match[1]) * (match[2] === 'rem' ? 16 : 1));
   metrics.maxBlurPx = blur.length ? Math.max(...blur) : 0;
 
-  // Background: body first, then :root/html, then the most common surface.
+  // Background: body first, then :root/html, then pseudo/ambient layers.
+  // Stacked CSS backgrounds list translucent glow overlays FIRST and the base
+  // canvas LAST; measure contrast against the base opaque stop (or bottom layer)
+  // rather than a semi-transparent glow stop.
   const backgroundDecls = declarations.filter((d) => matchesBody(d.selector)
     && (d.property === 'background' || d.property === 'background-color' || d.property === 'background-image'));
   const backgroundColors = backgroundDecls.flatMap((d) => colorsIn(d.value)).filter((color) => color.a > 0);
-  const background = backgroundColors[0] || null;
+  const opaqueBg = backgroundColors.find((color) => color.a >= 0.85);
+  const background = opaqueBg || backgroundColors[backgroundColors.length - 1] || backgroundColors[0] || null;
 
   const textDecls = declarations.filter((d) => matchesBody(d.selector) && d.property === 'color');
   const textColors = textDecls.flatMap((d) => colorsIn(d.value));
   const text = textColors[textColors.length - 1] || null;
 
-  const bodyHsl = background ? toHsl(background) : null;
   // Gradients carry several stops: a page is dark when the stops are dark.
   // Translucent overlay stops barely tint what is underneath: weight by alpha
   // so a 3%-white glow cannot make a near-black page read as "light".
@@ -344,7 +359,10 @@ function checkDesign(source, { file = 'index.html', goals = [] } = {}) {
   const lightness = backgroundColors.length
     ? backgroundColors.reduce((sum, color) => sum + toHsl(color).l * Math.max(color.a, 0.01), 0) / weightSum
     : null;
-  const hueTarget = backgroundColors.find((color) => toHsl(color).s > 0.12) || background;
+  const effectiveChroma = (color) => (Math.max(color.r, color.g, color.b) - Math.min(color.r, color.g, color.b)) * color.a;
+  const hueTarget = backgroundColors.find((color) => effectiveChroma(color) >= 14 && toHsl(color).s > 0.12)
+    || backgroundColors.find((color) => toHsl(color).s > 0.12)
+    || background;
   const hueHsl = hueTarget ? toHsl(hueTarget) : null;
   metrics.background = colorLabel(background);
   metrics.backgroundColors = backgroundColors.map(colorLabel);
@@ -358,6 +376,41 @@ function checkDesign(source, { file = 'index.html', goals = [] } = {}) {
     .filter((d) => (d.property === 'background' || d.property === 'background-color')
       && !matchesBody(d.selector) && colorsIn(d.value).some((color) => color.a > 0 && color.a < 0.95))
     .map((d) => d.selector)).size;
+
+  // Verify that elements with `backdrop-filter` actually let the backdrop show
+  // through rather than painting an opaque 95-98% dark card on top of black.
+  const translucentGlass = [];
+  const opaqueGlass = [];
+  for (const [sel, decls] of selectorMap.entries()) {
+    const hasFilter = decls.some((d) => (d.property === 'backdrop-filter' || d.property === '-webkit-backdrop-filter')
+      && /\bblur\(\s*([\d.]+)(px|rem)/.test(d.value));
+    if (!hasFilter) continue;
+    const blurMatch = decls
+      .map((d) => /blur\(\s*([\d.]+)(px|rem)/.exec(d.value))
+      .find(Boolean);
+    const blurPx = blurMatch ? Number(blurMatch[1]) * (blurMatch[2] === 'rem' ? 16 : 1) : 0;
+    if (blurPx < 4) continue;
+    const bgDecls = decls.filter((d) => d.property === 'background' || d.property === 'background-color' || d.property === 'background-image');
+    const bgColors = bgDecls.flatMap((d) => colorsIn(d.value)).filter((color) => color.a > 0);
+    const hasTranslucentFill = bgColors.length === 0 || bgColors.some((color) => color.a <= 0.65);
+    const maxAlpha = bgColors.length ? Math.max(...bgColors.map((color) => color.a)) : 0;
+    const borderColors = decls
+      .filter((d) => /^border(-color|-top|-top-color|-left|-right|-bottom)?$/.test(d.property))
+      .flatMap((d) => colorsIn(d.value));
+    const hasVisibleBorder = borderColors.some((color) => color.a >= 0.08);
+    const shadowDecls = decls.filter((d) => d.property === 'box-shadow' && !/^none$/i.test(d.value.trim()));
+    const hasShadow = shadowDecls.length > 0;
+    const hasInset = shadowDecls.some((d) => /\binset\b/i.test(d.value));
+    if (!hasTranslucentFill && maxAlpha > 0.72) {
+      opaqueGlass.push({ selector: sel, alphaPct: Math.round(maxAlpha * 100) });
+    } else {
+      translucentGlass.push({ selector: sel, hasVisibleBorder, hasShadow, hasInset });
+    }
+  }
+  metrics.translucentGlassSelectors = translucentGlass.length;
+  metrics.opaqueGlassSelectors = opaqueGlass;
+  metrics.glassBorderVisible = translucentGlass.some((entry) => entry.hasVisibleBorder);
+  metrics.glassShadowed = translucentGlass.some((entry) => entry.hasShadow);
 
   // Accent colours: buttons, links, badges, accent classes.
   const accents = [];
@@ -388,35 +441,62 @@ function checkDesign(source, { file = 'index.html', goals = [] } = {}) {
 
   const results = [];
   const words = [...new Set(String(goals.join(' ')).toLowerCase().split(/[^a-z]+/).filter(Boolean))];
+  const wantsBackdropColour = words.includes('dark') || words.includes('light') || words.includes('liquid') || words.includes('glass');
   for (const word of words) {
     if (HUE_RANGES[word]) {
       const range = HUE_RANGES[word];
+      // Require perceptible chroma (`effectiveChroma >= 14`) so near-black
+      // `#000208` (rgb 0,2,8) does not pretend to be rich dark blue.
       const byBackground = backgroundColors.some((color) => {
         const hsl = toHsl(color);
-        return hsl.s > 0.12 && withinHue(hsl.h, range);
+        return effectiveChroma(color) >= 14 && color.a >= 0.3 && hsl.s > 0.12 && withinHue(hsl.h, range);
       });
-      const byAccent = accents.some((entry) => entry.hsl.s > 0.25 && withinHue(entry.hsl.h, range));
-      results.push({
-        goal: word,
-        pass: Boolean(byBackground || byAccent),
-        detail: byBackground ? `background is ${word}` : byAccent ? `accent is ${word}` : `no ${word} background or accent found`,
-      });
+      const byAccent = accents.some((entry) => effectiveChroma(entry.color) >= 24 && entry.hsl.s > 0.25 && withinHue(entry.hsl.h, range));
+      const pass = wantsBackdropColour ? Boolean(byBackground) : Boolean(byBackground || byAccent);
+      const detail = byBackground
+        ? `background is ${word}`
+        : byAccent && !pass
+          ? `only an accent is ${word}, while page background ${metrics.background} reads neutral/pitch-black`
+          : byAccent
+            ? `accent is ${word}`
+            : `no perceptible ${word} canvas found (background ${metrics.background})`;
+      results.push({ goal: word, pass, detail });
     } else if (word === 'dark') {
       results.push({ goal: word, pass: metrics.backgroundLightness !== null && metrics.backgroundLightness < 0.45, detail: `background ${metrics.background} (lightness ${metrics.backgroundLightness ?? 'unknown'})` });
     } else if (word === 'light') {
       results.push({ goal: word, pass: metrics.backgroundLightness !== null && metrics.backgroundLightness > 0.7, detail: `background ${metrics.background}` });
     } else if (word === 'glass' || word === 'glassmorphism' || word === 'translucent' || word === 'frosted') {
-      const pass = metrics.backdropFilters.length > 0 && metrics.maxBlurPx >= 4 && metrics.translucentSurfaces > 0;
+      const pass = metrics.backdropFilters.length > 0
+        && metrics.maxBlurPx >= 4
+        && metrics.translucentSurfaces > 0
+        && metrics.translucentGlassSelectors > 0;
+      const detail = opaqueGlass.length && metrics.translucentGlassSelectors === 0
+        ? `${opaqueGlass[0].selector} has backdrop-filter blur but ${opaqueGlass[0].alphaPct}% opaque background (lower alpha to 0.06–0.28)`
+        : `${metrics.backdropFilters.length} backdrop-filter rule(s), ${metrics.translucentGlassSelectors} translucent blurred panel(s)`;
+      results.push({ goal: word, pass, detail });
+    } else if (word === 'liquid') {
+      const hasLiquidDepth = metrics.translucentGlassSelectors > 0
+        && metrics.maxBlurPx >= 12
+        && metrics.glassBorderVisible
+        && metrics.glassShadowed
+        && metrics.gradients > 0;
+      const missing = [];
+      if (opaqueGlass.length && !metrics.translucentGlassSelectors) missing.push(`${opaqueGlass[0].selector} fill is ${opaqueGlass[0].alphaPct}% opaque`);
+      else if (!metrics.translucentGlassSelectors) missing.push('no translucent backdrop-filter panel');
+      if (metrics.maxBlurPx < 12) missing.push(`blur ${metrics.maxBlurPx}px (<12px)`);
+      if (!metrics.glassBorderVisible) missing.push('glass border is invisible/missing (use ~0.16-0.30 alpha)');
+      if (!metrics.glassShadowed) missing.push('glass panel needs box-shadow depth/inset highlight');
+      if (!metrics.gradients) missing.push('needs layered gradient/orbs behind glass');
       results.push({
         goal: word,
-        pass,
-        detail: `${metrics.backdropFilters.length} backdrop-filter rule(s), ${metrics.translucentSurfaces} translucent surface(s)`,
+        pass: hasLiquidDepth,
+        detail: hasLiquidDepth
+          ? `blur ${metrics.maxBlurPx}px, translucent glass with crisp border, shadow & gradient backdrop`
+          : missing.join('; '),
       });
     } else if (word === 'responsive' || word === 'mobile') {
-      // Fluid block layout with a media query is responsive too; flex/grid is
-      // reported but not required.
-      const pass = metrics.viewport && metrics.mediaQueries > 0;
-      results.push({ goal: word, pass, detail: `viewport ${metrics.viewport ? 'yes' : 'no'}, ${metrics.mediaQueries} media quer${metrics.mediaQueries === 1 ? 'y' : 'ies'}, flex/grid rules ${metrics.flex + metrics.grid}` });
+      const pass = metrics.viewport && metrics.responsiveMediaQueries > 0;
+      results.push({ goal: word, pass, detail: `viewport ${metrics.viewport ? 'yes' : 'no'}, ${metrics.responsiveMediaQueries} layout media quer${metrics.responsiveMediaQueries === 1 ? 'y' : 'ies'}, flex/grid rules ${metrics.flex + metrics.grid}` });
     } else if (word === 'accessible' || word === 'contrast') {
       const pass = (metrics.contrast === null ? false : metrics.contrast >= 4.5) && metrics.focusVisibleRules > 0;
       results.push({ goal: word, pass, detail: `contrast ${metrics.contrast ?? 'unset'}:1, ${metrics.focusVisibleRules} focus rule(s)` });
@@ -441,10 +521,13 @@ function checkDesign(source, { file = 'index.html', goals = [] } = {}) {
     if (!metrics.fonts && doc) issues.push('No font-family is set, so the page uses the browser default font.');
     if (!metrics.hoverRules && /<(button|a|input|select|textarea)\b/i.test(doc)) issues.push('No :hover rule: interactive elements will not respond to the pointer.');
     if (!metrics.focusVisibleRules) issues.push('No :focus-visible rule: keyboard focus is invisible or the browser default.');
-    if (!metrics.mediaQueries && doc) issues.push('No media query: the layout cannot adapt to narrow windows.');
+    if (!metrics.responsiveMediaQueries && doc) issues.push('No responsive @media (max-width/min-width) breakpoint: the layout cannot adapt to narrow windows.');
     if (!metrics.variables && metrics.cssBytes > 400) issues.push('No CSS custom properties: the palette is hard-coded in every rule.');
     if (!metrics.transitions && metrics.hoverRules) issues.push('Hover changes without a transition snap instead of easing.');
     if (metrics.outlineNone && !metrics.focusVisibleRules) issues.push('outline:none removes focus rings with no replacement.');
+    if (opaqueGlass.length && !words.includes('glass') && !words.includes('liquid')) {
+      issues.push(`${opaqueGlass[0].selector} has backdrop-filter blur but ${opaqueGlass[0].alphaPct}% opaque background — lower fill alpha to 0.06–0.28 so glass refracts.`);
+    }
   }
   for (const result of results) if (!result.pass) issues.push(`Goal "${result.goal}" is not met: ${result.detail}.`);
 
@@ -469,6 +552,24 @@ function checkDesign(source, { file = 'index.html', goals = [] } = {}) {
   };
 }
 
+const KNOWN_GOAL_WORDS = new Set([
+  'dark', 'light', 'blue', 'navy', 'teal', 'cyan', 'green', 'purple', 'violet',
+  'pink', 'red', 'orange', 'gold', 'amber', 'liquid', 'glass', 'glassmorphism',
+  'translucent', 'frosted', 'responsive', 'mobile', 'accessible', 'contrast',
+  'rounded', 'gradient', 'shadow', 'depth',
+]);
+
+// Pull visual design keywords straight from the user's prompt so edit hints and
+// finish gates verify what they actually asked for.
+function extractDesignGoals(promptText) {
+  const words = String(promptText || '').toLowerCase().split(/[^a-z]+/).filter(Boolean);
+  const found = [];
+  for (const word of words) {
+    if (KNOWN_GOAL_WORDS.has(word) && !found.includes(word)) found.push(word);
+  }
+  return found;
+}
+
 function summarise(report) {
   if (!report) return '';
   if (report.ok) return `design ${report.score}/100 — styled as asked, no issues found`;
@@ -476,9 +577,10 @@ function summarise(report) {
   return `design ${report.score}/100 — ${report.issues.length} issue(s): ${top}${report.issues.length > 3 ? ' …' : ''}`;
 }
 
-// Appended to an edit result so a plain page cannot pass unnoticed.
-function designHint(root, files, maxFiles = 2) {
+// Appended to an edit result so a plain page or missed visual brief cannot pass unnoticed.
+function designHint(root, files, maxFiles = 2, goals = []) {
   const lines = [];
+  const activeGoals = Array.isArray(goals) ? goals.filter(Boolean) : [];
   for (const file of (Array.isArray(files) ? files : [files]).slice(0, maxFiles)) {
     if (!/\.(html?|css)$/i.test(file)) continue;
     let source;
@@ -486,14 +588,15 @@ function designHint(root, files, maxFiles = 2) {
     if (source.length > 400000) continue;
     if (/\.html?$/i.test(file) && !/<(body|style)/i.test(source)) continue;
     try {
-      const report = checkDesign(source, { file, goals: [] });
+      const report = checkDesign(source, { file, goals: activeGoals });
       if (report.issues.length) {
         lines.push(`- ${path.basename(file)}: design ${report.score}/100 — ${report.issues.slice(0, 3).join(' ')}`);
       }
     } catch { /* never break a successful edit */ }
   }
   if (!lines.length) return '';
-  return `\nDesign check (static analysis of the CSS just written):\n${lines.join('\n')}\nIf the user named colours, materials or a mood, call design_check with those words and fix every issue before saying the work is done.`;
+  const briefHint = activeGoals.length ? ` (brief: ${activeGoals.join(', ')})` : '';
+  return `\nDesign check${briefHint} (static analysis of the CSS just written):\n${lines.join('\n')}\nFix every reported issue above and verify cleanly with design_check before finishing.`;
 }
 
-module.exports = { checkDesign, summarise, designHint, parseColorToken, toHsl, contrastRatio };
+module.exports = { checkDesign, extractDesignGoals, summarise, designHint, parseColorToken, toHsl, contrastRatio };

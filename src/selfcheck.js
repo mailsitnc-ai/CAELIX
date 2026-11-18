@@ -463,16 +463,16 @@ async function run(context) {
 <style>:root{--bg:#071426;--text:#eaf2ff}
 body{margin:0;font-family:Inter,system-ui,sans-serif;color:var(--text);background:linear-gradient(160deg,var(--bg),#0b2540)}
 .card{padding:24px;border-radius:18px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);
-backdrop-filter:blur(22px) saturate(160%);box-shadow:0 24px 60px rgba(0,0,0,.45)}
+backdrop-filter:blur(22px) saturate(160%);box-shadow:0 24px 60px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.28)}
 button{background:#3d8bfd;color:#fff;border-radius:12px;transition:transform .15s ease}
 button:hover{transform:translateY(-1px)} button:focus-visible{outline:2px solid #fff}
 @media (max-width:520px){.card{padding:16px}}</style></head>
 <body><div class="card"><h1>Todo</h1><button>Add</button></div></body></html>`;
       await runner.execute('write_file', { path: 'glass.html', content: glass });
-      const strong = await runner.execute('design_check', { path: 'glass.html', goals: ['dark', 'blue', 'glass', 'responsive', 'accessible'] });
+      const strong = await runner.execute('design_check', { path: 'glass.html', goals: ['dark', 'blue', 'liquid', 'glass', 'responsive', 'accessible'] });
       if (!strong.design.ok) throw new Error(`The glass page failed: ${strong.design.issues.join(' | ')}`);
       if (strong.design.score !== 100) throw new Error(`Expected 100/100, got ${strong.design.score}.`);
-      return 'plain page flagged, dark-blue glass page 100/100';
+      return 'plain page flagged, dark-blue liquid glass page 100/100';
     });
 
     await step('background task starts, lists and stops', async () => {

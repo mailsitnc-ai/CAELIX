@@ -136,7 +136,7 @@ function toolDefinitions(root) {
           path: { type: 'string', description: 'HTML or CSS file to inspect, relative to the project.' },
           goals: {
             type: 'array',
-            description: 'Visual words from the request: dark, light, blue, teal, green, purple, pink, red, orange, gold, glass, glassmorphism, translucent, frosted, responsive, mobile, accessible, contrast, rounded, gradient, shadow, depth.',
+            description: 'Visual words from the request: dark, light, blue, navy, teal, green, purple, pink, red, orange, gold, liquid, glass, glassmorphism, translucent, frosted, responsive, mobile, accessible, contrast, rounded, gradient, shadow, depth.',
             items: { type: 'string' },
           },
         },
@@ -452,7 +452,7 @@ function toolDefinitions(root) {
 }
 
 class ToolRunner {
-  constructor({ root, mode, signal, ask, emit, tasks, questioner, browser }) {
+  constructor({ root, mode, signal, ask, emit, tasks, questioner, browser, promptGoals }) {
     this.root = path.resolve(root);
     this.mode = mode || 'ask';
     this.signal = signal;
@@ -461,6 +461,7 @@ class ToolRunner {
     this.tasks = tasks || null;
     this.questioner = questioner || null;
     this.browser = browser || null;
+    this.promptGoals = Array.isArray(promptGoals) ? promptGoals.filter(Boolean) : [];
   }
 
   getBrowser() {
@@ -610,7 +611,7 @@ class ToolRunner {
       additions: diff.additions,
       deletions: diff.deletions,
     });
-    return { output: `Wrote ${relative} (${diff.additions} added, ${diff.deletions} removed).${diagnose(this.root, [file])}${designHint(this.root, [file])}`, change: { file: relative, before, after, existed, ...diff } };
+    return { output: `Wrote ${relative} (${diff.additions} added, ${diff.deletions} removed).${diagnose(this.root, [file])}${designHint(this.root, [file], 2, this.promptGoals)}`, change: { file: relative, before, after, existed, ...diff } };
   }
 
   // Reads the CSS the page actually contains and reports whether the visual
@@ -622,7 +623,8 @@ class ToolRunner {
     if (stat.isDirectory()) throw new Error('design_check needs an HTML or CSS file, not a folder.');
     if (stat.size > 1_500_000) throw new Error('That file is too large to analyse.');
     const source = await fsp.readFile(file, 'utf8');
-    const goals = Array.isArray(input.goals) ? input.goals.map(String) : [];
+    const explicit = Array.isArray(input.goals) ? input.goals.map(String) : [];
+    const goals = [...new Set([...explicit, ...this.promptGoals])];
     const report = checkDesign(source, { file, goals });
     const lines = [`${relative} — design score ${report.score}/100`, summarise(report)];
     if (report.goals.length) {
@@ -715,7 +717,7 @@ class ToolRunner {
       additions: diff.additions,
       deletions: diff.deletions,
     });
-    return { output: `Edited ${relative} (${diff.additions} added, ${diff.deletions} removed).${diagnose(this.root, [file])}${designHint(this.root, [file])}`, change: { file: relative, before, after, existed: true, ...diff } };
+    return { output: `Edited ${relative} (${diff.additions} added, ${diff.deletions} removed).${diagnose(this.root, [file])}${designHint(this.root, [file], 2, this.promptGoals)}`, change: { file: relative, before, after, existed: true, ...diff } };
   }
 
   async multiEdit(input) {
@@ -769,7 +771,7 @@ class ToolRunner {
       });
       summary.push(`${relative} (+${diff.additions} −${diff.deletions})`);
     }
-    return { output: `Edited ${summary.join(', ')}.${diagnose(this.root, changed.map((item) => item.file))}${designHint(this.root, changed.map((item) => item.file))}`, meta: { files: changed.length } };
+    return { output: `Edited ${summary.join(', ')}.${diagnose(this.root, changed.map((item) => item.file))}${designHint(this.root, changed.map((item) => item.file), 2, this.promptGoals)}`, meta: { files: changed.length } };
   }
 
   async listDir(input) {
