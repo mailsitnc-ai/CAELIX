@@ -6,7 +6,7 @@
   "main": "src/main.js",
   "private": true,
   "author": "CAELIX",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "scripts": {
     "start": "electron .",
     "selfcheck": "CAELIX_SELFCHECK=1 electron .",
