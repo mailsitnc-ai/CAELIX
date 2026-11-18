@@ -55,7 +55,8 @@ Keys are encrypted with the macOS keychain (via Electron's Safe Storage) and sto
 
 - **Chat and Code workspaces** — chat for conversation, a full workspace for real projects with folder picker, changes panel, and terminal tabs
 - **Permission modes** — Manual (approve every edit), Accept Edits, Plan (read-only), Bypass, per chat
-- **23 built-in tools** — files, grep/glob, bash, notebooks, web fetch/search, an embedded Playwright-style browser pane, tasks, skills, subagents, and MCP servers
+- **24 built-in tools** — files, grep/glob, bash, notebooks, web fetch/search, an embedded Playwright-style browser pane, tasks, skills, subagents, MCP servers, and a **document writer**
+- **Real documents, written natively** — PDF, Word (`.docx`), Excel (`.xlsx`), PowerPoint (`.pptx`), OpenDocument (`.odt`/`.ods`/`.odp`), RTF, HTML, Markdown, text, CSV/TSV and EPUB. The writers are CAELIX's own code: no LibreOffice, no Word, no cloud service, no native module. They produce genuine packages (ZIP + OOXML/ODF, base-14 PDF fonts, embedded PNG/JPEG images, tables, numbered lists, styled headings) that open in Microsoft Office, Pages, Keynote, Numbers, LibreOffice, Google Docs, Preview / Books and Kindle tooling. Apple's private `.pages`/`.key`/`.numbers` formats are not written — those apps open the `.docx`/`.pptx`/`.xlsx` output directly, and PDF is available everywhere.
 - **Tiered model routing** — cheap fast models handle research and chat titles; your strongest model is saved for planning and edits
 - **Instant diagnostics after every edit** — `node --check`, TypeScript `tsc --noEmit` (touched files *and* cross-file callers), ESLint, Python compile/ruff/pyright, `go vet`, `cargo check` results go straight back to the model
 - **Mid-turn steering** — type corrections while the agent is still working; they're injected at the next step instead of being rejected
@@ -80,7 +81,7 @@ npm install          # installs Electron only
 npm run doctor       # environment check
 npm run package      # builds dist/CAELIX.app (signed locally, no prompts)
 node scripts/make-dmg.js   # builds dist/CAELIX-<version>.dmg
-npm run selfcheck    # end-to-end self-test (28 checks, headless)
+npm run selfcheck    # end-to-end self-test (30 steps, headless)
 ```
 
 No native compilation, no bundled runtimes beyond Electron itself. Requires Node.js 22+ to build.
@@ -89,6 +90,8 @@ No native compilation, no bundled runtimes beyond Electron itself. Requires Node
 
 - **Free models are not frontier models.** On small/medium tasks (debugging, scripts, multi-file features) CAELIX matches paid agents on correctness in our benchmarks; on very large 20+ file refactors, flagship models still hold instructions better. Team Mode closes most of that gap.
 - **Free tiers rate-limit.** The engine auto-fails-over across providers and models, but heavy all-day use benefits from keys on 2–3 providers.
+- **Apple iWork files are not written.** `.pages`, `.key` and `.numbers` are an undocumented container (IWA: Snappy-compressed protobuf), so they cannot be written reliably. Pages, Keynote and Numbers open the `.docx`, `.pptx`, `.xlsx` and PDF files CAELIX writes.
+- **EPUB previews:** macOS QuickLook has no EPUB thumbnail generator here; Apple Books, Calibre and Kindle readers open the file normally.
 - **Speed:** Team Mode double-checks your work, so runs take longer than a single unreviewed pass.
 - **Privacy:** free model routes may log or train on prompts depending on the provider (each provider's terms are linked in Keys). Nothing ever leaves your machine except the model API calls you choose to make.
 

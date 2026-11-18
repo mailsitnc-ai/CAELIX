@@ -9,6 +9,7 @@ const { spawn } = require('child_process');
 const platform = require('../platform');
 const { diffLines } = require('./diff');
 const { diagnose } = require('./diagnostics');
+const documents = require('./documents');
 
 const MAX_OUTPUT = 60_000;
 const READ_FILE_DEFAULT_LINES = 300;
@@ -123,6 +124,72 @@ function toolDefinitions(root) {
           replace_all: { type: 'boolean' },
         },
         required: ['path', 'old_string', 'new_string'],
+      },
+    },
+    {
+      name: 'write_document',
+      description: 'Create a real, application-ready document from structured content: PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), OpenDocument (.odt/.ods/.odp), RTF, HTML, Markdown, plain text, CSV/TSV or EPUB. Use this whenever the user asks for a report, letter, invoice, resume, deck, spreadsheet, ebook or PDF — never paste document XML or a fake .pdf as text. Word/PowerPoint/Excel/OpenDocument/EPUB output is a genuine ZIP+XML package that opens in Microsoft Office, Pages, Keynote, Numbers, LibreOffice and Google Docs. Apple-native .pages/.key/.numbers files are not produced: Pages, Keynote and Numbers open the .docx/.pptx/.xlsx output directly, and PDF is available to all three.',
+      parameters: {
+        type: 'object',
+        properties: {
+          format: {
+            type: 'string',
+            description: 'pdf | docx | xlsx | pptx | odt | ods | odp | rtf | html | md | txt | csv | tsv | epub',
+          },
+          output: {
+            type: 'string',
+            description: 'Destination path relative to the project, for example "docs/q3-report.pdf". The correct extension is appended when missing.',
+          },
+          title: { type: 'string', description: 'Document or deck title.' },
+          subtitle: { type: 'string', description: 'Optional subtitle or cover line.' },
+          author: { type: 'string', description: 'Optional author; defaults to CAELIX.' },
+          blocks: {
+            type: 'array',
+            description: 'Ordered content blocks. Shapes: {"type":"heading","text":"…","level":1}, {"type":"paragraph","text":"supports **bold**, *italic* and `code`"}, {"type":"bullets","items":["…"]}, {"type":"numbers","items":["…"]}, {"type":"table","headers":["A","B"],"rows":[["1","2"]]}, {"type":"code","text":"…","language":"js"}, {"type":"quote","text":"…"}, {"type":"image","path":"assets/logo.png","caption":"…"}, {"type":"pagebreak"}.',
+            items: {
+              type: 'object',
+              properties: {
+                type: { type: 'string' },
+                text: { type: 'string' },
+                level: { type: 'integer' },
+                items: { type: 'array', items: { type: 'string' } },
+                headers: { type: 'array', items: { type: 'string' } },
+                rows: { type: 'array', items: { type: 'array', items: { type: 'string' } } },
+                path: { type: 'string' },
+                caption: { type: 'string' },
+                language: { type: 'string' },
+              },
+              required: ['type'],
+            },
+          },
+          sheets: {
+            type: 'array',
+            description: 'For xlsx/ods/csv/tsv: [{"name":"Q3","headers":["Metric","Value"],"rows":[["Revenue",1200000]]}]. Numbers stay numeric.',
+            items: {
+              type: 'object',
+              properties: {
+                name: { type: 'string' },
+                headers: { type: 'array', items: { type: 'string' } },
+                rows: { type: 'array', items: { type: 'array' } },
+              },
+            },
+          },
+          slides: {
+            type: 'array',
+            description: 'For pptx/odp: [{"title":"Cover","subtitle":"…","bullets":[],"blocks":[],"notes":"…"}]. Without slides, a cover plus one slide per heading is generated.',
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string' },
+                subtitle: { type: 'string' },
+                bullets: { type: 'array', items: { type: 'string' } },
+                blocks: { type: 'array', items: { type: 'object' } },
+                notes: { type: 'string' },
+              },
+            },
+          },
+        },
+        required: ['format', 'output'],
       },
     },
     {
@@ -404,7 +471,7 @@ class ToolRunner {
     if (this.mode === 'plan' && risk !== 'read') return 'deny';
     if (this.mode === 'bypass' && risk !== 'protected') return 'allow';
     if (this.mode === 'accept' && risk !== 'protected'
-      && (tool === 'write_file' || tool === 'edit_file' || tool === 'multi_edit' || tool === 'notebook_edit')) return 'allow';
+      && (tool === 'write_file' || tool === 'edit_file' || tool === 'multi_edit' || tool === 'notebook_edit' || tool === 'write_document')) return 'allow';
     const key = `${tool}:${target}`;
     if (this.sessionAllowed?.has(key)) return 'allow';
     const decision = await this.ask({ tool, action, target, detail, risk });
@@ -421,6 +488,7 @@ class ToolRunner {
     switch (name) {
       case 'read_file': return this.readFile(input);
       case 'write_file': return this.writeFile(input);
+      case 'write_document': return this.writeDocument(input);
       case 'edit_file': return this.editFile(input);
       case 'list_dir': return this.listDir(input);
       case 'glob': return this.glob(input);
@@ -525,6 +593,53 @@ class ToolRunner {
       deletions: diff.deletions,
     });
     return { output: `Wrote ${relative} (${diff.additions} added, ${diff.deletions} removed).${diagnose(this.root, [file])}`, change: { file: relative, before, after, existed, ...diff } };
+  }
+
+  // Real document output (PDF/OOXML/ODF/EPUB/…). Binary files never go through
+  // the text diff path; the UI shows a compact "created" card instead.
+  async writeDocument(input) {
+    const format = documents.normaliseFormat(input.format);
+    const requested = documents.resolveOutput(input.output, format);
+    const file = this.resolvePath(requested);
+    const relative = path.relative(this.root, file);
+    const built = documents.build({
+      format,
+      title: input.title,
+      subtitle: input.subtitle,
+      author: input.author,
+      blocks: input.blocks,
+      sheets: input.sheets,
+      slides: input.slides,
+    }, { baseDir: this.root });
+
+    const kilobytes = (built.buffer.length / 1024).toFixed(1);
+    const decision = await this.permission(
+      'write_document',
+      `Create ${format.toUpperCase()} document`,
+      relative,
+      `${kilobytes} KB`,
+      isProtectedPath(relative) ? 'protected' : 'write',
+    );
+    if (decision !== 'allow') throw new Error('The user denied this document.');
+
+    documents.ensureWritableDirectory(file);
+    await fsp.writeFile(file, built.buffer);
+    this.emit?.({
+      type: 'change',
+      file: relative,
+      binary: true,
+      format,
+      bytes: built.buffer.length,
+      before: '',
+      after: '',
+      existed: false,
+      additions: 0,
+      deletions: 0,
+    });
+    return {
+      output: `Created ${relative} (${format.toUpperCase()}, ${kilobytes} KB).`,
+      change: { file: relative, binary: true, format, bytes: built.buffer.length },
+    };
   }
 
   async editFile(input) {

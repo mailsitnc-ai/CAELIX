@@ -76,6 +76,7 @@ const TOOL_LABELS = {
   read_file: 'Read', write_file: 'Write', edit_file: 'Edit', list_dir: 'List',
   glob: 'Glob', grep: 'Grep', bash: 'Terminal', todo_write: 'Tasks', web_fetch: 'Fetch',
   web_search: 'Search', notebook_edit: 'Notebook', skill: 'Skill', tool_search: 'Tool Search',
+  write_document: 'Document',
   multi_edit: 'Multi-edit', task_start: 'Task', task_list: 'Tasks', task_stop: 'Stop task',
   ask_user: 'Question', present_plan: 'Plan', subagent: 'Subagent',
 };
@@ -695,6 +696,18 @@ function renderChanges() {
   for (const change of state.changes) {
     const item = document.createElement('div');
     item.className = 'change-item';
+    if (change.binary) {
+      // Documents (PDF, Office, EPUB) have no text diff: show what was made.
+      const size = change.bytes ? `${Math.max(1, Math.round(change.bytes / 1024))} KB` : '';
+      item.innerHTML = `
+        <div class="change-head">
+          <span class="change-file">${escapeHtml(change.file)}</span>
+          <span class="change-counts">${escapeHtml((change.format || 'file').toUpperCase())}${size ? ` · ${size}` : ''}</span>
+        </div>
+        <div class="panel-empty">Created document</div>`;
+      list.appendChild(item);
+      continue;
+    }
     const lines = simpleDiff(change.before || '', change.after || '');
     const additions = change.additions ?? lines.filter((line) => line.kind === 'add').length;
     const deletions = change.deletions ?? lines.filter((line) => line.kind === 'del').length;

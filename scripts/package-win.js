@@ -57,7 +57,8 @@ function zip(source, target) {
     run('powershell.exe', ['-NoLogo', '-NoProfile', '-Command',
       `Compress-Archive -LiteralPath '${source.replace(/'/g, "''")}' -DestinationPath '${target.replace(/'/g, "''")}' -Force`]);
   } else {
-    run('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', source, target]);
+    // No AppleDouble sidecars: a Windows user must not find __MACOSX or ._ files.
+    run('ditto', ['-c', '-k', '--norsrc', '--noextattr', '--noqtn', '--keepParent', source, target]);
   }
 }
 
