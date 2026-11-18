@@ -10,6 +10,7 @@ const platform = require('../platform');
 const { diffLines } = require('./diff');
 const { diagnose } = require('./diagnostics');
 const documents = require('./documents');
+const { checkDesign, summarise, designHint } = require('./design');
 
 const MAX_OUTPUT = 60_000;
 const READ_FILE_DEFAULT_LINES = 300;
@@ -124,6 +125,22 @@ function toolDefinitions(root) {
           replace_all: { type: 'boolean' },
         },
         required: ['path', 'old_string', 'new_string'],
+      },
+    },
+    {
+      name: 'design_check',
+      description: 'Check whether a local HTML/CSS page actually follows the visual brief (colour, material, layout, readability) before you call the work done. Pass the exact words the user used as goals, for example ["dark","blue","glass","responsive","accessible"]. It reads the CSS statically and reports the real background colour, text colour and contrast ratio, whether translucent blur surfaces exist, and what is missing. Fix every reported issue, then run it again. This is static analysis, not a screenshot: styles applied later by JavaScript are not seen.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'HTML or CSS file to inspect, relative to the project.' },
+          goals: {
+            type: 'array',
+            description: 'Visual words from the request: dark, light, blue, teal, green, purple, pink, red, orange, gold, glass, glassmorphism, translucent, frosted, responsive, mobile, accessible, contrast, rounded, gradient, shadow, depth.',
+            items: { type: 'string' },
+          },
+        },
+        required: ['path'],
       },
     },
     {
@@ -489,6 +506,7 @@ class ToolRunner {
       case 'read_file': return this.readFile(input);
       case 'write_file': return this.writeFile(input);
       case 'write_document': return this.writeDocument(input);
+      case 'design_check': return this.designCheck(input);
       case 'edit_file': return this.editFile(input);
       case 'list_dir': return this.listDir(input);
       case 'glob': return this.glob(input);
@@ -592,7 +610,32 @@ class ToolRunner {
       additions: diff.additions,
       deletions: diff.deletions,
     });
-    return { output: `Wrote ${relative} (${diff.additions} added, ${diff.deletions} removed).${diagnose(this.root, [file])}`, change: { file: relative, before, after, existed, ...diff } };
+    return { output: `Wrote ${relative} (${diff.additions} added, ${diff.deletions} removed).${diagnose(this.root, [file])}${designHint(this.root, [file])}`, change: { file: relative, before, after, existed, ...diff } };
+  }
+
+  // Reads the CSS the page actually contains and reports whether the visual
+  // brief was met. Static analysis, so no browser and no screenshot needed.
+  async designCheck(input) {
+    const file = this.resolvePath(input.path, { mustExist: true });
+    const relative = path.relative(this.root, file);
+    const stat = await fsp.stat(file);
+    if (stat.isDirectory()) throw new Error('design_check needs an HTML or CSS file, not a folder.');
+    if (stat.size > 1_500_000) throw new Error('That file is too large to analyse.');
+    const source = await fsp.readFile(file, 'utf8');
+    const goals = Array.isArray(input.goals) ? input.goals.map(String) : [];
+    const report = checkDesign(source, { file, goals });
+    const lines = [`${relative} — design score ${report.score}/100`, summarise(report)];
+    if (report.goals.length) {
+      lines.push('Brief:', report.goals.map((goal) => `${goal.goal} ${goal.pass ? 'met' : 'NOT met'} (${goal.detail})`).join(' · '));
+    }
+    lines.push(`Measured: background ${report.metrics.background}, text ${report.metrics.text}, contrast ${report.metrics.contrast ?? 'unset'}:1, ${report.metrics.backdropFilters.length} backdrop-filter, ${report.metrics.translucentSurfaces} translucent surface(s), ${report.metrics.variables} CSS variable(s), ${report.metrics.hoverRules} hover / ${report.metrics.focusVisibleRules} focus rule(s), ${report.metrics.mediaQueries} media quer${report.metrics.mediaQueries === 1 ? 'y' : 'ies'}.`);
+    if (report.issues.length) {
+      lines.push('Issues to fix:');
+      for (const issue of report.issues) lines.push(`- ${issue}`);
+    } else {
+      lines.push('No issues found: the page is styled, responsive and readable as written.');
+    }
+    return { output: lines.join('\n'), design: report };
   }
 
   // Real document output (PDF/OOXML/ODF/EPUB/…). Binary files never go through
@@ -672,7 +715,7 @@ class ToolRunner {
       additions: diff.additions,
       deletions: diff.deletions,
     });
-    return { output: `Edited ${relative} (${diff.additions} added, ${diff.deletions} removed).${diagnose(this.root, [file])}`, change: { file: relative, before, after, existed: true, ...diff } };
+    return { output: `Edited ${relative} (${diff.additions} added, ${diff.deletions} removed).${diagnose(this.root, [file])}${designHint(this.root, [file])}`, change: { file: relative, before, after, existed: true, ...diff } };
   }
 
   async multiEdit(input) {
@@ -726,7 +769,7 @@ class ToolRunner {
       });
       summary.push(`${relative} (+${diff.additions} −${diff.deletions})`);
     }
-    return { output: `Edited ${summary.join(', ')}.${diagnose(this.root, changed.map((item) => item.file))}`, meta: { files: changed.length } };
+    return { output: `Edited ${summary.join(', ')}.${diagnose(this.root, changed.map((item) => item.file))}${designHint(this.root, changed.map((item) => item.file))}`, meta: { files: changed.length } };
   }
 
   async listDir(input) {

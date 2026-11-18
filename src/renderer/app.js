@@ -77,6 +77,7 @@ const TOOL_LABELS = {
   glob: 'Glob', grep: 'Grep', bash: 'Terminal', todo_write: 'Tasks', web_fetch: 'Fetch',
   web_search: 'Search', notebook_edit: 'Notebook', skill: 'Skill', tool_search: 'Tool Search',
   write_document: 'Document',
+  design_check: 'Design',
   multi_edit: 'Multi-edit', task_start: 'Task', task_list: 'Tasks', task_stop: 'Stop task',
   ask_user: 'Question', present_plan: 'Plan', subagent: 'Subagent',
 };

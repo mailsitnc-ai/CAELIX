@@ -447,6 +447,34 @@ async function run(context) {
       return 'pdf, docx, xlsx, pptx and epub written with valid signatures';
     });
 
+    await step('design fidelity: a plain page is flagged and a glass page passes', async () => {
+      const { ToolRunner } = require('./engine/tools');
+      const runner = new ToolRunner({
+        root: workspace, mode: 'bypass', ask: async () => 'allow', emit: (event) => engine.emit(event),
+      });
+      const bland = '<!doctype html><html><head><title>Todo</title></head><body><h1>Todo</h1><input><button>Add</button></body></html>';
+      const wrote = await runner.execute('write_file', { path: 'plain.html', content: bland });
+      if (!wrote.output.includes('Design check')) throw new Error('write_file did not append a design report for HTML.');
+      const weak = await runner.execute('design_check', { path: 'plain.html', goals: ['dark', 'blue', 'glass'] });
+      if (weak.design.ok) throw new Error('An unstyled page passed the design check.');
+      if (!weak.output.includes('dark NOT met')) throw new Error('The design check did not report the missed brief.');
+
+      const glass = `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>:root{--bg:#071426;--text:#eaf2ff}
+body{margin:0;font-family:Inter,system-ui,sans-serif;color:var(--text);background:linear-gradient(160deg,var(--bg),#0b2540)}
+.card{padding:24px;border-radius:18px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);
+backdrop-filter:blur(22px) saturate(160%);box-shadow:0 24px 60px rgba(0,0,0,.45)}
+button{background:#3d8bfd;color:#fff;border-radius:12px;transition:transform .15s ease}
+button:hover{transform:translateY(-1px)} button:focus-visible{outline:2px solid #fff}
+@media (max-width:520px){.card{padding:16px}}</style></head>
+<body><div class="card"><h1>Todo</h1><button>Add</button></div></body></html>`;
+      await runner.execute('write_file', { path: 'glass.html', content: glass });
+      const strong = await runner.execute('design_check', { path: 'glass.html', goals: ['dark', 'blue', 'glass', 'responsive', 'accessible'] });
+      if (!strong.design.ok) throw new Error(`The glass page failed: ${strong.design.issues.join(' | ')}`);
+      if (strong.design.score !== 100) throw new Error(`Expected 100/100, got ${strong.design.score}.`);
+      return 'plain page flagged, dark-blue glass page 100/100';
+    });
+
     await step('background task starts, lists and stops', async () => {
       const { ToolRunner, TaskRegistry } = require('./engine/tools');
       const registry = new TaskRegistry(path.join(checksDir, 'tasks'));

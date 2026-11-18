@@ -55,7 +55,8 @@ Keys are encrypted with the macOS keychain (via Electron's Safe Storage) and sto
 
 - **Chat and Code workspaces** — chat for conversation, a full workspace for real projects with folder picker, changes panel, and terminal tabs
 - **Permission modes** — Manual (approve every edit), Accept Edits, Plan (read-only), Bypass, per chat
-- **24 built-in tools** — files, grep/glob, bash, notebooks, web fetch/search, an embedded Playwright-style browser pane, tasks, skills, subagents, MCP servers, and a **document writer**
+- **25 built-in tools** — files, grep/glob, bash, notebooks, web fetch/search, an embedded Playwright-style browser pane, tasks, skills, subagents, MCP servers, and a **document writer**
+- **Visual briefs are enforced, not hoped for** — when you ask for "dark blue liquid glass", CAELIX records that as a design contract in its instructions, then calls `design_check` on the HTML/CSS it wrote. The checker measures the real background colour, text contrast, blur surfaces, hover/focus states and responsive rules, and lists every miss by name ("Goal \"glass\" is not met: 0 backdrop-filter rules"). Editing an HTML or CSS file also appends a design report automatically, so a flat page cannot pass unnoticed.
 - **Real documents, written natively** — PDF, Word (`.docx`), Excel (`.xlsx`), PowerPoint (`.pptx`), OpenDocument (`.odt`/`.ods`/`.odp`), RTF, HTML, Markdown, text, CSV/TSV and EPUB. The writers are CAELIX's own code: no LibreOffice, no Word, no cloud service, no native module. They produce genuine packages (ZIP + OOXML/ODF, base-14 PDF fonts, embedded PNG/JPEG images, tables, numbered lists, styled headings) that open in Microsoft Office, Pages, Keynote, Numbers, LibreOffice, Google Docs, Preview / Books and Kindle tooling. Apple's private `.pages`/`.key`/`.numbers` formats are not written — those apps open the `.docx`/`.pptx`/`.xlsx` output directly, and PDF is available everywhere.
 - **Tiered model routing** — cheap fast models handle research and chat titles; your strongest model is saved for planning and edits
 - **Instant diagnostics after every edit** — `node --check`, TypeScript `tsc --noEmit` (touched files *and* cross-file callers), ESLint, Python compile/ruff/pyright, `go vet`, `cargo check` results go straight back to the model
@@ -81,7 +82,7 @@ npm install          # installs Electron only
 npm run doctor       # environment check
 npm run package      # builds dist/CAELIX.app (signed locally, no prompts)
 node scripts/make-dmg.js   # builds dist/CAELIX-<version>.dmg
-npm run selfcheck    # end-to-end self-test (30 steps, headless)
+npm run selfcheck    # end-to-end self-test (31 steps, headless)
 ```
 
 No native compilation, no bundled runtimes beyond Electron itself. Requires Node.js 22+ to build.
