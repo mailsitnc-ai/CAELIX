@@ -90,6 +90,9 @@ function main() {
 
   const appDir = path.join(resources, 'app');
   fs.mkdirSync(appDir, { recursive: true });
+  // Self-check artifacts must never end up inside the bundle: they would be
+  // sealed by the signature and then rewritten on the next run, invalidating it.
+  fs.rmSync(path.join(appDir, 'checks'), { recursive: true, force: true });
   copy(path.join(ROOT, 'src'), path.join(appDir, 'src'));
   copy(path.join(ROOT, 'assets'), path.join(appDir, 'assets'));
   fs.writeFileSync(path.join(appDir, 'package.json'), JSON.stringify({
@@ -126,6 +129,17 @@ function main() {
       console.warn('Ad-hoc signing failed; the bundle may still run from this Mac.');
     }
   }
+
+  // A bundle that fails this check is reported by macOS as "damaged" the
+  // moment it is downloaded, so never hand out a build that does not pass.
+  // Codesign walks the nested helpers and frameworks as well.
+  try {
+    execFileSync('codesign', ['--verify', '--deep', '--strict', APP], { stdio: 'pipe' });
+  } catch (error) {
+    const detail = String(error.stderr || error.stdout || error.message || '').trim();
+    throw new Error(`Signature seal is invalid — macOS would call this app "damaged".\n${detail}\nFix the build before packaging: nothing may be written into dist/CAELIX.app after signing.`);
+  }
+  console.log('Signature seal valid (codesign --verify --deep --strict).');
 
   const shortcut = skipShortcut ? null : createShortcut(APP);
   console.log('');

@@ -8,7 +8,15 @@ CAELIX gives you a full coding-agent harness — planning modes, tool permission
 
 1. Download `CAELIX-<version>.dmg` from the [latest release](../../releases/latest).
 2. Open the DMG and drag **CAELIX** into **Applications**.
-3. First launch: right-click **CAELIX.app → Open → Open** (or System Settings → Privacy & Security → *Open Anyway*). macOS shows this because the app is signed with a local developer identity, not a paid Apple certificate. You only do this once.
+3. First launch — macOS will warn because CAELIX is signed locally, not with a paid Apple certificate. **The app is not damaged.** Do one of these, once:
+   - Terminal: `xattr -cr /Applications/CAELIX.app` then open CAELIX normally, or
+   - right-click **CAELIX.app → Open → Open**.
+
+If macOS says the app "is damaged and can't be opened", that is Gatekeeper quarantine, not a corrupted download — use the `xattr` command above. You can confirm the download itself is intact by comparing SHA-256 with the value in the release notes:
+
+```bash
+shasum -a 256 ~/Downloads/CAELIX-<version>.dmg
+```
 
 Requires macOS 12+. No other dependencies — everything runs locally.
 

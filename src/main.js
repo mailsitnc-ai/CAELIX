@@ -34,12 +34,20 @@ function trace(message) {
     fs.appendFileSync(path.join(CHECKS_DIR, 'selfcheck-trace.txt'), `${new Date().toISOString()} ${message}\n`);
   } catch { /* diagnostics only */ }
 }
-const CHECKS_DIR = process.env.CAELIX_CHECKS_DIR ? path.resolve(process.env.CAELIX_CHECKS_DIR) : path.join(ROOT, 'checks');
+// A packaged app must never write inside its own bundle. Adding files under
+// Contents/Resources breaks the code-signature seal, and macOS then rejects
+// the whole app as "damaged" — which is not corruption, just a broken seal.
+// Packaged self-checks therefore report to the isolated user-data folder.
+const CHECKS_DIR = process.env.CAELIX_CHECKS_DIR
+  ? path.resolve(process.env.CAELIX_CHECKS_DIR)
+  : SELF_CHECK && app.isPackaged
+    ? path.join(app.getPath('appData'), 'CAELIX-Selfcheck', 'checks')
+    : path.join(ROOT, 'checks');
 
 app.setName(APP_NAME);
 
 if (SELF_CHECK) {
-  const isolated = path.join(app.getPath('appData'), 'CAELIX Selfcheck');
+  const isolated = path.join(app.getPath('appData'), 'CAELIX-Selfcheck');
   app.setPath('userData', isolated);
   fs.mkdirSync(isolated, { recursive: true });
   for (const file of ['sessions.json', 'keys.enc', 'mcp.json', 'hooks.json', 'settings.json']) {

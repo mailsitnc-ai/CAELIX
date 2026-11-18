@@ -636,7 +636,9 @@ async function run(context) {
       await waitFor('window.__caelixState.mcpOpen === true', 3000, 'mcp modal');
       await waitFor('document.querySelector("#mcp-list").textContent.includes("4 tool(s)") && document.querySelector("#mcp-list").textContent.includes("3 tool(s)")', 10000, 'built-in desktop & memory MCP servers connected');
       await setValue('#mcp-name', 'mockping');
-      await setValue('#mcp-command', mockMcp);
+      // Quote the path: the command box deliberately splits on spaces, so a
+      // workspace path containing one must be quoted like any other shell arg.
+      await setValue('#mcp-command', `"${mockMcp}"`);
       await click('#mcp-add');
       await waitFor('document.querySelector("#mcp-list").textContent.includes("1 tool(s)")', 8000, 'mcp connected with 1 tool');
       await click('#mcp-list [data-name="mockping"] .mcp-remove');

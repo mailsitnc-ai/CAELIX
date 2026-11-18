@@ -1,5 +1,14 @@
 # CAELIX changelog
 
+## 0.1.38 — Fix the false "DMG is corrupted/damaged" report (broken signature seal)
+
+- **Root cause found, not a corrupt download:** the packaged app was signed, then the packaged self-check wrote its reports into `CAELIX.app/Contents/Resources/app/checks/`. Any file added inside a signed bundle invalidates the sealed-resource list, so `codesign --verify --deep --strict` failed with `a sealed resource is missing or invalid` and macOS refused the downloaded app with the misleading "CAELIX is damaged and can't be opened" message. The published DMG's bytes were always fine: GitHub's asset hash-matched the local build and `hdiutil verify` reported `VALID`.
+- **Packaged self-checks no longer touch the bundle (`src/main.js`):** when `app.isPackaged`, the default checks folder is now `<appData>/CAELIX Selfcheck/checks`, outside the app. Dev runs still write to the repo's `checks/`. `CAELIX_CHECKS_DIR` overrides both.
+- **Packaging refuses to ship a broken seal (`scripts/package.js`):** stale `Resources/app/checks` is removed before signing, and the build now fails with an explicit error if `codesign --verify --deep --strict` does not pass.
+- **DMG builder gates on the signature (`scripts/make-dmg.js`):** before creating the image it verifies the seal, refuses a bundle containing a `checks/` folder, and after mounting the finished DMG it re-verifies the seal from inside the image, the version, the binary, and the new first-launch instructions.
+- **First-launch help that matches reality:** the DMG now contains `READ ME FIRST.txt` explaining that the warning is Gatekeeper quarantine (not corruption) and giving the one-time `xattr -cr /Applications/CAELIX.app` command plus the right-click → Open alternative. The README install section now says the same and explains how to verify the download.
+- **Why the warning appears at all:** CAELIX is signed with the local `CAELIX Local` identity, not a paid Apple Developer certificate, so it cannot be notarized. The signature is now internally consistent (helpers, frameworks and app), which is what Gatekeeper checks first.
+
 ## 0.1.37 — Kilo Gateway integration: a free model lane that needs no key at all
 
 - **New `kilo` provider (`src/engine/providers.js`):** Kilo's AI Gateway (`ai-gateway.kilo.ai`) is OpenAI-compatible, so CAELIX speaks it natively. The curated free catalog (verified live: 13 tool-capable `:free` rows, several with 1M-token windows — `nvidia/nemotron-3.5-super-vl:free`, `nvidia/nemotron-3.5-lightning:free`, `nvidia/nemotron-3-ultra-550b-a55b:free`, `baidu/ernie-5.5-flash-preview:free`, `particle-ai/particle-1:free`, `dots-studio/dots-3-note-preview:free`, `cohere/north-mini-code:free`, plus `kilo-auto/free`) sorts curated-first, and the model picker's refresh pulls the live `isFree` + tool-capable list with no authentication.
