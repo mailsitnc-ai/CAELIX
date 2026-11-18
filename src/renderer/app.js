@@ -2642,7 +2642,12 @@ function bind() {
   for (const btn of $$('#hooks-presets .preset-chip[data-hook-preset]')) {
     btn.addEventListener('click', () => {
       const p = btn.dataset.hookPreset;
-      const map = {
+      const isWin = api.platform === 'win32';
+      const map = isWin ? {
+        notify: { event: 'Stop', matcher: '*', cmd: '[System.Media.SystemSounds]::Asterisk.Play()' },
+        'git-block': { event: 'PreToolUse', matcher: '^bash$', cmd: '$d=[Console]::In.ReadToEnd()|ConvertFrom-Json; if(([string]$d.input.command) -match \'git\\s+push\\s+.*--force\'){ [Console]::Error.Write(\'Blocked force push\'); exit 2 }' },
+        audit: { event: 'PostToolUse', matcher: '*', cmd: '$d=[Console]::In.ReadToEnd()|ConvertFrom-Json; Write-Output "Logged $($d.tool)"' },
+      } : {
         notify: { event: 'Stop', matcher: '*', cmd: 'osascript -e \'display notification "Turn finished" with title "CAELIX"\'' },
         'git-block': { event: 'PreToolUse', matcher: '^bash$', cmd: '/usr/bin/python3 -c \'import json,re,sys; d=json.load(sys.stdin); c=(d.get("input") or {}).get("command",""); re.search(r"git\\s+push\\s+.*--force",c) and (sys.stderr.write("Blocked force push\\n"), sys.exit(2))\'' },
         audit: { event: 'PostToolUse', matcher: '*', cmd: '/usr/bin/python3 -c \'import json,sys; d=json.load(sys.stdin); print("Logged", d.get("tool"))\'' },

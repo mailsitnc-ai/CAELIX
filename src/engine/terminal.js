@@ -10,6 +10,7 @@
 
 const { spawn, execFileSync } = require('child_process');
 const crypto = require('crypto');
+const platform = require('../platform');
 
 const MAX_ENTRIES = 500;
 const DEFAULT_TIMEOUT = 120000;
@@ -47,6 +48,7 @@ function normalise(text) {
 }
 
 function readLastLoginLine() {
+  if (!platform.IS_MAC) return '';
   try {
     const user = process.env.USER || '';
     if (!user) return '';
@@ -86,23 +88,34 @@ class ShellTab {
       if (loginLine) this.entries.push({ text: loginLine, at: Date.now() });
     }
 
-    const expectScript = [
-      'spawn -noecho /bin/zsh -i',
-      'catch {stty cols 500 rows 40 < $spawn_out(slave,name)}',
-      'interact',
-    ].join('; ');
+    if (platform.IS_WIN) {
+      // cmd.exe keeps a real interactive session per tab. The completion
+      // marker uses %errorlevel% instead of the POSIX $?.
+      this.child = spawn(process.env.ComSpec || 'cmd.exe', ['/Q', '/K'], {
+        cwd,
+        env: { ...process.env, CAELIX: '1' },
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } else {
+      const expectScript = [
+        'spawn -noecho /bin/zsh -i',
+        'catch {stty cols 500 rows 40 < $spawn_out(slave,name)}',
+        'interact',
+      ].join('; ');
 
-    this.child = spawn('/usr/bin/expect', ['-c', expectScript], {
-      cwd,
-      env: {
-        ...process.env,
-        CAELIX: '1',
-        TERM: 'xterm-256color',
-        COLUMNS: '500',
-        PROMPT_EOL_MARK: '',
-      },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+      this.child = spawn('/usr/bin/expect', ['-c', expectScript], {
+        cwd,
+        env: {
+          ...process.env,
+          CAELIX: '1',
+          TERM: 'xterm-256color',
+          COLUMNS: '500',
+          PROMPT_EOL_MARK: '',
+        },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    }
     this.child.stdout.on('data', (chunk) => this.consume(chunk));
     this.child.stderr.on('data', (chunk) => this.consume(chunk));
     this.child.on('error', (error) => {
@@ -216,7 +229,7 @@ class ShellTab {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.finishRun(null, new Error('The command timed out. Press Stop or open a new tab.'));
-        try { this.child.kill('SIGKILL'); } catch { /* already gone */ }
+        platform.killTree(this.child);
       }, Math.max(1000, Math.min(3_600_000, Number(timeoutMs) || DEFAULT_TIMEOUT)));
       this.pending = {
         token,
@@ -227,12 +240,20 @@ class ShellTab {
         reject,
       };
       this.child.stdin.write(`${text}\n`);
-      this.child.stdin.write(`echo "__CX_${token}_$?__"\n`);
+      this.child.stdin.write(platform.IS_WIN
+        ? `echo __CX_${token}_%errorlevel%__\n`
+        : `echo "__CX_${token}_$?__"\n`);
     });
   }
 
   // Sends Ctrl+C (0x03) to the PTY so a stuck interactive program releases the tab.
   interrupt() {
+    if (platform.IS_WIN) {
+      // cmd.exe cannot be interrupted through a pipe; close the shell cleanly.
+      this.finishRun(null, new Error('Interrupted.'));
+      platform.killTree(this.child, 'SIGTERM');
+      return;
+    }
     try {
       this.child.stdin.write('\x03');
     } catch { /* shell gone */ }
@@ -253,7 +274,7 @@ class ShellTab {
   dispose() {
     this.closed = true;
     this.finishRun(null, new Error('The terminal was closed.'));
-    try { this.child.kill('SIGTERM'); } catch { /* already gone */ }
+    platform.killTree(this.child, 'SIGTERM');
   }
 }
 

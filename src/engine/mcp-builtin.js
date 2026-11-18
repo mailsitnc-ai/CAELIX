@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const readline = require('readline');
 const { execFileSync } = require('child_process');
+const platform = require('../platform');
 
 function parseArgs(argv) {
   const out = { server: 'desktop', file: '' };
@@ -56,7 +57,7 @@ function writeMemories(items) {
 const DESKTOP_TOOLS = [
   {
     name: 'mac_system_info',
-    description: 'Inspect macOS system details, CPU/RAM, free disk space, and available developer tools (node, python3, git, brew).',
+    description: 'Inspect system details, CPU/RAM, free disk space, and available developer tools (node, python3, git).',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -66,12 +67,12 @@ const DESKTOP_TOOLS = [
   },
   {
     name: 'listening_ports',
-    description: 'List local listening TCP ports and server process names on this Mac.',
+    description: 'List local listening TCP ports and server process names on this computer.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'clipboard_read',
-    description: 'Read the current plain-text content from the macOS clipboard.',
+    description: 'Read the current plain-text content from the system clipboard.',
     inputSchema: { type: 'object', properties: {} },
   },
 ];
@@ -117,16 +118,22 @@ function callDesktopTool(name) {
   const cwd = process.cwd();
   switch (name) {
     case 'mac_system_info': {
+      const nodeBin = platform.which('node');
+      const pythonBin = platform.pythonCommand();
+      const gitBin = platform.which('git');
+      const disk = platform.IS_WIN
+        ? safeExec('powershell.exe', ['-NoProfile', '-Command', 'Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | Select-Object DeviceID,FreeSpace,Size | Format-Table -AutoSize'])
+        : safeExec('/bin/df', ['-h', cwd]);
       const lines = [
         `OS: ${os.platform()} ${os.release()} (${os.arch()})`,
         `Host: ${os.hostname()}`,
         `CPUs: ${os.cpus().length}`,
         `RAM: ${(os.totalmem() / (1024 ** 3)).toFixed(1)} GB`,
         `Workspace: ${cwd}`,
-        `Node: ${safeExec('/usr/bin/env', ['node', '-v']) || 'not found'}`,
-        `Python3: ${safeExec('/usr/bin/env', ['python3', '--version']) || 'not found'}`,
-        `Git: ${safeExec('/usr/bin/env', ['git', '--version']) || 'not found'}`,
-        `Disk (${cwd}):\n${safeExec('/bin/df', ['-h', cwd])}`,
+        `Node: ${nodeBin ? safeExec(nodeBin, ['-v']) : 'not found'}`,
+        `Python: ${pythonBin ? safeExec(pythonBin, ['--version']) : 'not found'}`,
+        `Git: ${gitBin ? safeExec('git', ['--version']) : 'not found'}`,
+        `Disk (${cwd}):\n${disk}`,
       ];
       return { content: [{ type: 'text', text: lines.join('\n') }] };
     }
@@ -148,11 +155,16 @@ function callDesktopTool(name) {
       return { content: [{ type: 'text', text: out }] };
     }
     case 'listening_ports': {
-      const out = safeExec('/usr/sbin/lsof', ['-iTCP', '-sTCP:LISTEN', '-n', '-P']);
+      const out = platform.IS_WIN
+        ? String(safeExec('netstat', ['-ano']) || '')
+          .split(/\r?\n/).filter((line) => /LISTENING/i.test(line)).join('\n')
+        : safeExec('/usr/sbin/lsof', ['-iTCP', '-sTCP:LISTEN', '-n', '-P']);
       return { content: [{ type: 'text', text: out || 'No listening TCP ports reported.' }] };
     }
     case 'clipboard_read': {
-      const text = safeExec('/usr/bin/pbpaste', []);
+      const text = platform.IS_WIN
+        ? safeExec('powershell.exe', ['-NoProfile', '-Command', 'Get-Clipboard -Raw'])
+        : safeExec('/usr/bin/pbpaste', []);
       return { content: [{ type: 'text', text: text || '(clipboard is empty or non-text)' }] };
     }
     default:

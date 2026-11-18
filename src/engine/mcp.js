@@ -4,12 +4,11 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+const platform = require('../platform');
 
 function extraPathEnv(extra = {}) {
-  const base = process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin';
-  const parts = ['/opt/homebrew/bin', '/usr/local/bin', ...base.split(':')];
-  const merged = [...new Set(parts.filter(Boolean))].join(':');
-  return { ...process.env, ...extra, PATH: merged };
+  const merged = platform.mergedPath();
+  return { ...process.env, ...extra, PATH: merged, Path: merged };
 }
 
 function safeReadJson(file) {
@@ -59,8 +58,7 @@ class StdioMcpClient {
     if (!command) throw new Error(`MCP server "${this.name}" has no command.`);
     this.child = spawn(command, args, {
       cwd: cwd || process.cwd(),
-      env,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      env,      stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stderr = '';
     this.child.stdout.on('data', (chunk) => this.onData(chunk.toString('utf8')));

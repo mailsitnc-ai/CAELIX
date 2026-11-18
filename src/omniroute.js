@@ -11,6 +11,7 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
+const platform = require('./platform');
 
 const PORT = 20128;
 const EXTRA_BIN_DIRS = [
@@ -48,24 +49,17 @@ async function isUp() {
 // must include a directory that has node — GUI-launched Electron apps get a
 // minimal PATH, so we rebuild it around what we actually find.
 function childEnv(binDir) {
-  const base = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'];
-  const dirs = [...new Set([binDir, ...EXTRA_BIN_DIRS, ...base].filter(Boolean))];
-  return { ...process.env, PATH: dirs.join(':') };
+  const merged = platform.mergedPath([binDir, ...EXTRA_BIN_DIRS].filter(Boolean));
+  return { ...process.env, PATH: merged, Path: merged };
 }
 
 function findLauncher() {
-  for (const dir of EXTRA_BIN_DIRS) {
-    const bin = path.join(dir, 'omniroute');
-    try {
-      fs.accessSync(bin, fs.constants.X_OK);
-      return { cmd: bin, args: [], binDir: dir };
-    } catch { /* next dir */ }
-  }
-  // Fallback: npx resolves the package from its cache.
-  for (const dir of EXTRA_BIN_DIRS) {
-    const npx = path.join(dir, 'npx');
-    if (fs.existsSync(npx)) return { cmd: npx, args: ['-y', 'omniroute'], binDir: dir };
-  }
+  const direct = platform.which('omniroute');
+  if (direct) return { cmd: direct, args: [], binDir: path.dirname(direct) };
+  // Fallback: npx resolves the package from its cache. `where` on Windows
+  // returns the .cmd shim, which spawn needs explicitly.
+  const npx = platform.which('npx');
+  if (npx) return { cmd: npx, args: ['-y', 'omniroute'], binDir: path.dirname(npx) };
   return { cmd: 'npx', args: ['-y', 'omniroute'], binDir: null };
 }
 

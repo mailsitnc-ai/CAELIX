@@ -1,6 +1,6 @@
 # CAELIX
 
-A free, local AI coding agent for macOS. Electron + plain HTML/CSS/JS — no React, no build tools, no telemetry. Your keys, your files, your machine.
+A free, local AI coding agent for **macOS and Windows**. Electron + plain HTML/CSS/JS — no React, no build tools, no telemetry. Your keys, your files, your machine.
 
 CAELIX gives you a full coding-agent harness — planning modes, tool permissions, checkpoints, diffs, terminal tabs, an embedded browser, and a **multi-model "Team Mode"** where one AI builds and an independent AI from a different provider reviews and proves the work — running entirely on **free API tiers at $0**.
 
@@ -19,6 +19,14 @@ shasum -a 256 ~/Downloads/CAELIX-<version>.dmg
 ```
 
 Requires macOS 12+. No other dependencies — everything runs locally.
+
+### Windows (portable, no installer)
+
+1. Download `CAELIX-<version>-win-x64.zip` from the [latest release](../../releases/latest).
+2. Unzip it and keep the folder together — run **CAELIX.exe** from inside it (do not move the exe out).
+3. Windows SmartScreen may warn because the build is not code-signed: click **More info → Run anyway**. One time only.
+
+No administrator rights, installer or runtime needed. Updates are handled by the same in-app **Update** button.
 
 ## Updates
 

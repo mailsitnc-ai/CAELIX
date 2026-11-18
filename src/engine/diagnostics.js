@@ -17,12 +17,24 @@ const fs = require('fs');
 const path = require('path');
 
 let pythonState;
-function hasPython() {
+let pythonBinary;
+function detectPython() {
   if (pythonState === undefined) {
-    try { pythonState = spawnSync('python3', ['--version'], { timeout: 5000 }).status === 0; }
-    catch { pythonState = false; }
+    pythonState = false;
+    for (const candidate of ['python3', 'python', 'py']) {
+      try {
+        if (spawnSync(candidate, ['--version'], { timeout: 5000 }).status === 0) {
+          pythonState = true;
+          pythonBinary = candidate;
+          break;
+        }
+      } catch { /* next candidate */ }
+    }
   }
   return pythonState;
+}
+function hasPython() {
+  return detectPython();
 }
 
 // Cached per-process: whether a binary exists under node_modules/.bin (root or parent monorepo).
@@ -70,7 +82,7 @@ function checkFile(root, file) {
     }
   } else if (ext === '.py' && hasPython()) {
     try {
-      const result = spawnSync('python3', ['-m', 'py_compile', file], { timeout: 10_000, encoding: 'utf8' });
+      const result = spawnSync(pythonBinary || 'python3', ['-m', 'py_compile', file], { timeout: 10_000, encoding: 'utf8' });
       if (result.status !== 0 && result.stderr) {
         const first = result.stderr.split('\n').filter(Boolean).slice(0, 2).join(' | ');
         problems.push(`python: ${first.slice(0, 300)}`);

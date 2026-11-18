@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
+const platform = require('../platform');
 
 const HOOK_EVENTS = ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop'];
 
@@ -36,13 +36,13 @@ function matcherMatches(matcher, value) {
 
 function runShellHook(command, payload, cwd, timeoutMs = 10000) {
   return new Promise((resolve) => {
-    const basePath = process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin';
-    const mergedPath = [...new Set(['/opt/homebrew/bin', '/usr/local/bin', ...basePath.split(':')])].join(':');
-    const child = spawn('/bin/zsh', ['-lc', command], {
+    const mergedPath = platform.mergedPath();
+    const child = platform.spawnHook(command, {
       cwd: cwd || process.cwd(),
       env: {
         ...process.env,
         PATH: mergedPath,
+        Path: mergedPath,
         CAELIX_HOOK_EVENT: String(payload.event || ''),
         CAELIX_PROJECT_DIR: String(cwd || ''),
       },
@@ -63,7 +63,7 @@ function runShellHook(command, payload, cwd, timeoutMs = 10000) {
       });
     };
     const timer = setTimeout(() => {
-      try { child.kill('SIGKILL'); } catch { /* ignore */ }
+      platform.killTree(child);
       finish(1, true);
     }, timeoutMs);
 
@@ -85,7 +85,7 @@ function runShellHook(command, payload, cwd, timeoutMs = 10000) {
   });
 }
 
-const DEFAULT_HOOKS = [
+const POSIX_HOOKS = [
   {
     id: 'builtin_shell_guard',
     event: 'PreToolUse',
@@ -111,6 +111,38 @@ const DEFAULT_HOOKS = [
     timeoutMs: 5000,
   },
 ];
+
+// Windows equivalents: hooks run through PowerShell (see platform.spawnHook),
+// and receive the same JSON payload on stdin. Only exit code 2 blocks a tool,
+// so an environment problem degrades to "no guard" instead of locking the app.
+const WINDOWS_HOOKS = [
+  {
+    id: 'builtin_shell_guard',
+    event: 'PreToolUse',
+    matcher: '^bash$',
+    command: "$d=[Console]::In.ReadToEnd()|ConvertFrom-Json; $c=[string]$d.input.command; if($c -match '(^|[;&|]\\s*)(rm\\s+-[rf]*\\s+(/|~)|Remove-Item\\s+[^;]*-Recurse|format\\s+[a-z]:|diskpart\\s)'){ [Console]::Error.Write('Blocked destructive shell command by CAELIX shell-guard hook.'); exit 2 }",
+    enabled: true,
+    timeoutMs: 5000,
+  },
+  {
+    id: 'builtin_secret_guard',
+    event: 'PreToolUse',
+    matcher: '^(write_file|edit_file|multi_edit)$',
+    command: "$d=[Console]::In.ReadToEnd()|ConvertFrom-Json; $p=Split-Path ([string]$d.input.path) -Leaf; if($p -match '^(\\.env(\\..*)?|.*\\.(pem|key|p12)|id_(rsa|ed25519)|keys\\.enc)$'){ [Console]::Error.Write(\"Blocked modifying secret/key file $p by CAELIX secret-guard hook.\"); exit 2 }",
+    enabled: true,
+    timeoutMs: 5000,
+  },
+  {
+    id: 'builtin_syntax_check',
+    event: 'PostToolUse',
+    matcher: '^(write_file|edit_file|multi_edit)$',
+    command: "$d=[Console]::In.ReadToEnd()|ConvertFrom-Json; $p=[string]$d.input.path; $full=Join-Path ([string]$d.cwd) $p; if($p -match '\\.json$' -and (Test-Path -LiteralPath $full)){ try { Get-Content -LiteralPath $full -Raw | ConvertFrom-Json | Out-Null } catch { Write-Output \"JSON syntax warning in ${p}: $($_.Exception.Message)\" } } elseif($p -match '\\.(js|mjs|cjs)$' -and (Test-Path -LiteralPath $full) -and (Get-Command node -ErrorAction SilentlyContinue)){ node --check $full 2>&1 }",
+    enabled: true,
+    timeoutMs: 5000,
+  },
+];
+
+const DEFAULT_HOOKS = platform.IS_WIN ? WINDOWS_HOOKS : POSIX_HOOKS;
 
 class HooksManager {
   constructor(userDataDir) {

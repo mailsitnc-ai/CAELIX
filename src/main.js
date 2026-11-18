@@ -46,6 +46,7 @@ const CHECKS_DIR = process.env.CAELIX_CHECKS_DIR
     : path.join(ROOT, 'checks');
 
 app.setName(APP_NAME);
+if (process.platform === 'win32') app.setAppUserModelId('app.caelix.desktop');
 
 if (SELF_CHECK) {
   const isolated = path.join(app.getPath('appData'), 'CAELIX-Selfcheck');
@@ -225,8 +226,9 @@ function createWindow() {
     show: false,
     title: APP_NAME,
     backgroundColor: '#0b0d10',
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 18, y: 17 },
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 18, y: 17 } }
+      : {}),
     icon: ICON,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -303,6 +305,39 @@ function createWindow() {
 }
 
 function buildMenu() {
+  if (process.platform === 'win32') {
+    Menu.setApplicationMenu(Menu.buildFromTemplate([
+      { label: 'File', submenu: [{ role: 'quit', label: 'Exit' }] },
+      {
+        label: 'Edit',
+        submenu: [
+          { role: 'undo' }, { role: 'redo' }, { type: 'separator' },
+          { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' },
+        ],
+      },
+      {
+        label: 'View',
+        submenu: [
+          { role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' },
+          { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' },
+          { type: 'separator' }, { role: 'togglefullscreen' },
+        ],
+      },
+      {
+        label: 'Help',
+        submenu: [{
+          label: `About ${APP_NAME}`,
+          click: () => dialog.showMessageBox(win, {
+            type: 'info',
+            title: `About ${APP_NAME}`,
+            message: `${APP_NAME} ${app.getVersion()}`,
+            detail: 'A free, local AI coding agent. Electron + plain HTML/CSS/JS.',
+          }),
+        }],
+      },
+    ]));
+    return;
+  }
   const template = [
     {
       label: APP_NAME,

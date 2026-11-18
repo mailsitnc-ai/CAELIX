@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const platform = require('../platform');
 const { diffLines } = require('./diff');
 const { diagnose } = require('./diagnostics');
 
@@ -704,10 +705,12 @@ class ToolRunner {
     if (decision !== 'allow') throw new Error('The user denied this command.');
     const timeout = Math.min(600000, Math.max(1000, Number(input.timeout_ms) || 60000));
     return new Promise((resolve, reject) => {
-      const child = spawn('/bin/zsh', ['-lc', command], {
+      const shell = platform.shellCommand(command);
+      const child = spawn(shell.file, shell.args, {
         cwd: this.root,
         env: { ...process.env, CAELIX: '1', TERM: 'dumb' },
-        detached: true,
+        detached: !platform.IS_WIN,
+        windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       let stdout = '';
@@ -722,12 +725,12 @@ class ToolRunner {
         else resolve(result);
       };
       const timer = setTimeout(() => {
-        try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already gone */ }
+        platform.killTree(child);
         this.emit?.({ type: 'terminal-output', text: `\n[timed out after ${timeout} ms]\n` });
         finish({ output: truncate(`${stdout}${stderr}`), meta: { exitCode: null, timedOut: true } });
       }, timeout);
       const abort = () => {
-        try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already gone */ }
+        platform.killTree(child);
         this.emit?.({ type: 'terminal-output', text: '\n[cancelled]\n' });
         finish({ output: truncate(`${stdout}${stderr}`), meta: { exitCode: null, cancelled: true } });
       };
@@ -1082,10 +1085,12 @@ class TaskRegistry {
     const id = `task_${crypto.randomBytes(4).toString('hex')}`;
     const outputFile = path.join(this.directory, `${id}.log`);
     const stream = fs.createWriteStream(outputFile, { flags: 'a' });
-    const child = spawn('/bin/zsh', ['-lc', String(command)], {
+    const shell = platform.shellCommand(String(command));
+    const child = spawn(shell.file, shell.args, {
       cwd,
       env: { ...process.env, CAELIX: '1', TERM: 'dumb' },
-      detached: true,
+      detached: !platform.IS_WIN,
+      windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const task = {
@@ -1154,11 +1159,7 @@ class TaskRegistry {
     const task = this.tasks.get(id);
     if (!task) return null;
     if (task.status === 'running') {
-      try { process.kill(-task.child.pid, 'SIGTERM'); } catch { /* already gone */ }
-      const force = setTimeout(() => {
-        try { process.kill(-task.child.pid, 'SIGKILL'); } catch { /* already gone */ }
-      }, 1200);
-      if (force.unref) force.unref();
+      platform.killTree(task.child);
       task.status = 'stopped';
       task.endedAt = Date.now();
     }
