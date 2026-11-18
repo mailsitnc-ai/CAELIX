@@ -586,6 +586,10 @@ async function run(context) {
       if (teamOptCount < 2) throw new Error(`Expected >= 2 Team model-1 options, got ${teamOptCount}`);
       const teamOpt2Count = await evaluate('document.querySelectorAll("#team-model-2 option").length');
       if (teamOpt2Count < 2) throw new Error(`Expected >= 2 Team model-2 options, got ${teamOpt2Count}`);
+      const kiloInTeam = await evaluate('[...document.querySelectorAll("#team-model-1 option, #team-model-2 option")].some((option) => option.value.startsWith("kilo::"))');
+      if (!kiloInTeam) throw new Error('Kilo is missing from the Team Mode model pickers.');
+      const anonymousInTeam = await evaluate('window.__caelixState.providers.some((provider) => provider.anonymous)');
+      if (!anonymousInTeam) throw new Error('No anonymous provider reached the renderer, so Team Mode cannot list Kilo.');
       await click('#team-save-btn');
       await waitFor('document.querySelector("#team-chip")?.textContent.includes("Team ✓")', 3000, 'team chip active after save');
       await click('#team-chip');
@@ -871,6 +875,27 @@ async function run(context) {
       await evaluate('([...document.querySelectorAll(".session-item")].find(el => el.textContent.includes("CAELIX self-check chat")) || document.querySelector(".session-item"))?.click()');
       await waitFor('document.querySelector("#chat-title").textContent === "CAELIX self-check chat"', 5000, 'restored self-check chat before final reload');
       return 'folder chat saved, survived empty stub & window reload, and reopened on folder select';
+    });
+
+    await step('update button and updater logic are ready for future releases', async () => {
+      const updater = require(path.join(__dirname, 'updater'));
+      if (updater.compareVersions('0.1.40', '0.1.39') <= 0) throw new Error('compareVersions must order 0.1.40 above 0.1.39.');
+      if (updater.compareVersions('v0.1.39', '0.1.39') !== 0) throw new Error('compareVersions must treat v0.1.39 and 0.1.39 as equal.');
+      const release = updater.parseRelease({
+        tag_name: 'v9.9.9',
+        html_url: 'https://github.com/mailsitnc-ai/CAELIX/releases/tag/v9.9.9',
+        assets: [{ name: 'CAELIX-9.9.9.dmg', browser_download_url: 'https://example.com/CAELIX-9.9.9.dmg', size: 10 }],
+      }, '0.1.39');
+      if (!release.available || release.assetName !== 'CAELIX-9.9.9.dmg' || !release.assetUrl) {
+        throw new Error('Updater did not pick the DMG asset from a newer release.');
+      }
+      const bare = updater.parseRelease({ tag_name: 'v9.9.9', assets: [] }, '0.1.39');
+      if (bare.assetUrl !== null) throw new Error('Updater must not invent an asset when the release has none.');
+      const button = await evaluate('Boolean(document.querySelector("#update-btn"))');
+      if (!button) throw new Error('Update button is missing from the top bar.');
+      const hidden = await evaluate('document.querySelector("#update-btn").classList.contains("hidden")');
+      if (!hidden) throw new Error('Update button must stay hidden when no newer release is offered.');
+      return 'version comparison, DMG asset discovery and the top-bar update button verified';
     });
 
     await step('restart the window and find the chat again', async () => {

@@ -15,6 +15,7 @@ const { HooksManager } = require('./engine/hooks');
 const { AgentRegistry } = require('./engine/agents');
 const { providerList, testKey, fetchProviderModels, PROVIDERS } = require('./engine/providers');
 const omnirouteHelper = require('./omniroute');
+const updater = require('./updater');
 const { BrowserPanel } = require('./browser');
 
 const PROCESS_STARTED = Date.now();
@@ -385,6 +386,29 @@ function registerIpc() {
     firstPaintMs,
     encryption: SELF_CHECK ? true : safeStorage.isEncryptionAvailable(),
   }));
+
+  ipcMain.handle('update:check', async () => {
+    try {
+      return await updater.check({ currentVersion: app.getVersion() });
+    } catch (error) {
+      // An offline machine or GitHub hiccup must never interrupt the app.
+      return { available: false, current: app.getVersion(), error: error.message };
+    }
+  });
+
+  ipcMain.handle('update:install', async (event) => {
+    const result = await updater.install({
+      app,
+      currentVersion: app.getVersion(),
+      fetchImpl: global.fetch,
+      openPath: (target) => shell.openPath(target),
+      onProgress: (progress) => {
+        if (!event.sender.isDestroyed()) event.sender.send('update:progress', progress);
+      },
+    });
+    if (result?.started) setTimeout(() => app.exit(0), 600);
+    return result;
+  });
 
   ipcMain.handle('providers:list', () => {
     const version = app.getVersion();

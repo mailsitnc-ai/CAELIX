@@ -20,6 +20,10 @@ shasum -a 256 ~/Downloads/CAELIX-<version>.dmg
 
 Requires macOS 12+. No other dependencies — everything runs locally.
 
+## Updates
+
+CAELIX checks its own GitHub releases on startup. When a newer version exists, an **Update** button appears in the top bar — click it once and the app downloads, verifies and installs the new version, then restarts itself. No manual downloads after the first install. (Versions older than 0.1.39 do not have the button, so they need one manual update.)
+
 ## Add your free keys (2 minutes)
 
 Open **Keys** in the app and paste free API keys from any of these — all have $0 tiers:

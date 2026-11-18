@@ -2696,7 +2696,9 @@ function bind() {
     const seen = new Set();
     const configuredIds = new Set(state.keys.filter((k) => k.configured).map((k) => k.id));
     for (const p of state.providers) {
-      if (!p.keyless && !configuredIds.has(p.id) && p.id !== selectedProvider) continue;
+      // Keyless and anonymous providers (Kilo's free tier) are always usable,
+      // so they belong in the Team Mode pickers without a saved key.
+      if (!p.keyless && !p.anonymous && !configuredIds.has(p.id) && p.id !== selectedProvider) continue;
       for (const m of p.models || []) {
         const val = `${p.id}::${m}`;
         if (seen.has(val)) continue;
@@ -3175,6 +3177,68 @@ function reportFirstPaint() {
   });
 }
 
+// ---- In-app updates -------------------------------------------------------
+// The installed app asks GitHub for `releases/latest`; a newer tag is enough
+// to offer the update. The main process downloads the DMG, verifies it, swaps
+// the bundle and relaunches — so future releases need no code change here.
+function renderUpdateButton(info) {
+  const btn = $('#update-btn');
+  if (!btn) return;
+  if (!info?.available) {
+    state.update = null;
+    btn.classList.add('hidden');
+    return;
+  }
+  state.update = info;
+  btn.textContent = `Update ${info.latest}`;
+  btn.title = `CAELIX ${info.latest} is available — click to install and restart`;
+  btn.disabled = false;
+  btn.classList.remove('hidden');
+}
+
+async function checkForUpdates() {
+  if (!state.info || state.info.selfcheck) return;
+  try {
+    renderUpdateButton(await api.invoke('update:check'));
+  } catch {
+    // Offline, rate-limited or private network: leave the button hidden.
+  }
+}
+
+async function installUpdate() {
+  const btn = $('#update-btn');
+  if (!btn || !state.update?.available || btn.disabled) return;
+  btn.disabled = true;
+  btn.textContent = 'Updating…';
+  try {
+    const result = await api.invoke('update:install');
+    if (result?.upToDate) {
+      toast('CAELIX is already up to date.');
+      renderUpdateButton(result);
+      return;
+    }
+    if (result?.started) {
+      btn.textContent = 'Restarting…';
+      toast(`Installing CAELIX ${result.latest}. The app restarts by itself.`);
+      return;
+    }
+  } catch (error) {
+    toast(error.message);
+    btn.disabled = false;
+    renderUpdateButton(state.update);
+  }
+}
+
+api.on('update:progress', (progress) => {
+  const btn = $('#update-btn');
+  if (!btn || btn.classList.contains('hidden')) return;
+  if (progress?.stage === 'download') btn.textContent = `Downloading ${progress.percent || 0}%`;
+  else if (progress?.stage === 'verify') btn.textContent = 'Verifying…';
+  else if (progress?.stage === 'install') btn.textContent = 'Installing…';
+});
+
+$('#update-btn')?.addEventListener('click', installUpdate);
+
 async function init() {
   api.on('chat:event', onChatEvent);
   const [info, providers, keys, sessions, savedSettings] = await Promise.all([
@@ -3239,6 +3303,7 @@ async function init() {
   renderAll();
   resizePrompt();
   reportFirstPaint();
+  void checkForUpdates();
   state.initialized = true;
   window.__caelixReady = true;
   window.__caelixState = state;
