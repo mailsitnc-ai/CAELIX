@@ -28,6 +28,8 @@ Requires macOS 12+. No other dependencies — everything runs locally.
 
 No administrator rights, installer or runtime needed. Updates are handled by the same in-app **Update** button.
 
+Windows builds are assembled from the same `src/` as the macOS app and are content-verified at build time (executable present, icon and version resources applied, sources byte-identical to the repository). They are built on macOS, so the Windows binary has not been executed by the maintainer — if anything misbehaves, open an issue with the exact message.
+
 ## Updates
 
 CAELIX checks its own GitHub releases on startup. When a newer version exists, an **Update** button appears in the top bar — click it once and the app downloads, verifies and installs the new version, then restarts itself. No manual downloads after the first install. (Versions older than 0.1.39 do not have the button, so they need one manual update.)
