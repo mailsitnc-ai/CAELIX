@@ -14,6 +14,7 @@
 
 const { spawnSync } = require('child_process');
 const fs = require('fs');
+const platform = require('../platform');
 const path = require('path');
 
 let pythonState;
@@ -39,6 +40,14 @@ function hasPython() {
 
 // Cached per-process: whether a binary exists under node_modules/.bin (root or parent monorepo).
 const binCache = new Map();
+// .cmd/.bat shims are not directly executable by spawn on Windows, so they go
+// through cmd.exe; everything else spawns normally.
+function runBin(file, args, options) {
+  if (platform.IS_WIN && /\.(cmd|bat)$/i.test(file)) {
+    return spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', file, ...args], options);
+  }
+  return spawnSync(file, args, options);
+}
 function localBin(root, name) {
   const key = `${root}:${name}`;
   if (binCache.has(key)) return binCache.get(key);
@@ -46,10 +55,12 @@ function localBin(root, name) {
     path.join(root, 'node_modules', '.bin', name),
     path.join(path.dirname(root), 'node_modules', '.bin', name),
     path.join(root, '.venv', 'bin', name),
+    path.join(root, '.venv', 'Scripts', name),
     path.join(root, 'venv', 'bin', name),
+    path.join(root, 'venv', 'Scripts', name),
   ];
   for (const file of candidates) {
-    for (const variant of [file, `${file}.cmd`, `${file}.ps1`]) {
+    for (const variant of [file, `${file}.cmd`, `${file}.ps1`, `${file}.exe`]) {
       if (fs.existsSync(variant)) {
         binCache.set(key, variant);
         return variant;
@@ -101,7 +112,7 @@ function typeScriptCheck(root, touched) {
   const tsc = localBin(root, 'tsc');
   if ((!hasTsconfig && !hasJsconfig) || !tsc) return null;
   const args = hasJsconfig ? ['--project', 'jsconfig.json', '--noEmit', '--pretty', 'false'] : ['--noEmit', '--pretty', 'false'];
-  const result = spawnSync(tsc, args, {
+  const result = runBin(tsc, args, {
     cwd: root, timeout: 30_000, encoding: 'utf8',
   });
   const out = `${result.stdout || ''}\n${result.stderr || ''}`;
@@ -119,7 +130,7 @@ function ecosystemCheck(root, codeFiles) {
     const ruff = localBin(root, 'ruff');
     const pyTargets = codeFiles.filter((f) => f.endsWith('.py')).map((f) => (path.isAbsolute(f) ? path.relative(root, f) : f));
     if (ruff && pyTargets.length) {
-      const r = spawnSync(ruff, ['check', '--output-format', 'concise', ...pyTargets], { cwd: root, timeout: 12_000, encoding: 'utf8' });
+      const r = runBin(ruff, ['check', '--output-format', 'concise', ...pyTargets], { cwd: root, timeout: 12_000, encoding: 'utf8' });
       if (r.status !== 0 && r.stdout) {
         for (const line of r.stdout.split('\n').filter(Boolean).slice(0, 6)) {
           problems.push(`ruff: ${line.trim()}`);
@@ -128,7 +139,7 @@ function ecosystemCheck(root, codeFiles) {
     }
     const pyright = localBin(root, 'pyright');
     if (pyright) {
-      const r = spawnSync(pyright, ['--outputjson'], { cwd: root, timeout: 25_000, encoding: 'utf8' });
+      const r = runBin(pyright, ['--outputjson'], { cwd: root, timeout: 25_000, encoding: 'utf8' });
       try {
         const parsed = JSON.parse(r.stdout || '{}');
         for (const diag of (parsed.generalDiagnostics || []).filter((d) => d.severity === 'error').slice(0, 6)) {
@@ -176,7 +187,7 @@ function eslintCheck(root, touched) {
   const hasConfig = fs.readdirSync(root).some((name) => /^\.eslintrc(\.|$)/.test(name) || /^eslint\.config\./.test(name));
   if (!hasConfig) return null;
   const targets = touched.slice(0, 4).map((file) => (path.isAbsolute(file) ? path.relative(root, file) : file));
-  const result = spawnSync(eslint, ['--no-warn-ignored', '--format', 'json', ...targets], {
+  const result = runBin(eslint, ['--no-warn-ignored', '--format', 'json', ...targets], {
     cwd: root, timeout: 15_000, encoding: 'utf8',
   });
   let parsed;

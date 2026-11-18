@@ -3,6 +3,9 @@
 /* global window, document, performance, navigator, requestAnimationFrame */
 
 const api = window.caelix;
+// The platform drives window-chrome spacing: macOS reserves room for the
+// traffic lights, Windows for the overlaid minimise/maximise/close buttons.
+document.documentElement.setAttribute('data-platform', (api && api.platform) || 'unknown');
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
@@ -981,7 +984,7 @@ function renderKeys() {
         try {
           const res = await api.invoke('keys:save', { provider: provider.id, key: value, append });
           input.value = '';
-          hint.textContent = res.count > 1 ? `Saved ${res.count} encrypted keys for automatic rotation.` : 'Saved, encrypted by macOS.';
+          hint.textContent = res.count > 1 ? `Saved ${res.count} encrypted keys for automatic rotation.` : 'Saved, encrypted by your system.';
           await refreshKeys();
           api.invoke('providers:refresh', { provider: provider.id })
             .then((refreshed) => {

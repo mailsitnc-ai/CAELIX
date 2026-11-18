@@ -162,7 +162,7 @@ function toolDefinitions(root) {
     },
     {
       name: 'bash',
-      description: 'Run a shell command in the project folder. Captures stdout, stderr and the exit code. Commands requiring an interactive terminal should be avoided.',
+      description: `Run a shell command in the project folder. Captures stdout, stderr and the exit code. Commands requiring an interactive terminal should be avoided. ${platform.IS_WIN ? 'This computer runs Windows, so commands execute in cmd.exe (use && for chaining; ls/dir both work).' : 'This computer runs macOS, so commands execute in zsh.'}`,
       parameters: {
         type: 'object',
         properties: {

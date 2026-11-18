@@ -216,6 +216,12 @@ function answerQuestion(id, answer) {
   return true;
 }
 
+function titleBarOverlayFor(theme) {
+  return theme === 'light'
+    ? { color: '#f6f7f9', symbolColor: '#1b2027', height: 48 }
+    : { color: '#0b0d10', symbolColor: '#d7dde6', height: 48 };
+}
+
 function createWindow() {
   trace('createWindow: building BrowserWindow');
   win = new BrowserWindow({
@@ -228,7 +234,14 @@ function createWindow() {
     backgroundColor: '#0b0d10',
     ...(process.platform === 'darwin'
       ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 18, y: 17 } }
-      : {}),
+      : process.platform === 'win32'
+        // One title bar: the native minimise/maximise/close buttons are drawn
+        // over CAELIX's own top bar instead of adding a second one above it.
+        ? {
+          titleBarStyle: 'hidden',
+          titleBarOverlay: titleBarOverlayFor(settings?.get?.('theme', 'dark')),
+        }
+        : {}),
     icon: ICON,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -474,7 +487,13 @@ function registerIpc() {
   }));
 
   ipcMain.handle('settings:set', (_event, patch = {}) => {
-    if (patch.theme === 'dark' || patch.theme === 'light') settings.set('theme', patch.theme);
+    if (patch.theme === 'dark' || patch.theme === 'light') {
+      settings.set('theme', patch.theme);
+      // Keep the native Windows window buttons readable in both themes.
+      if (process.platform === 'win32' && win && !win.isDestroyed()) {
+        try { win.setTitleBarOverlay(titleBarOverlayFor(patch.theme)); } catch { /* older Electron */ }
+      }
+    }
     if (patch.viewMode === 'normal' || patch.viewMode === 'verbose') settings.set('viewMode', patch.viewMode);
     if (patch.surface === 'chat' || patch.surface === 'code') settings.set('surface', patch.surface);
     if (Array.isArray(patch.favouriteModels)) {

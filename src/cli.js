@@ -7,6 +7,16 @@ const os = require('os');
 const { spawnSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
+
+// Same location Electron's app.getPath('userData') uses on each platform.
+function userDataDir() {
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    return path.join(appData, 'CAELIX');
+  }
+  if (process.platform === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support', 'CAELIX');
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'CAELIX');
+}
 const MODES = new Set(['ask', 'accept', 'plan', 'bypass']);
 const KEY_ENV = {
   gemini: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
@@ -53,7 +63,11 @@ async function doctor() {
   const major = Number(process.versions.node.split('.')[0]);
   checks.push(check('Node.js', major >= 22, process.versions.node));
 
-  const electron = path.join(ROOT, 'node_modules', 'electron', 'dist', 'Electron.app', 'Contents', 'MacOS', 'Electron');
+  const electron = process.platform === 'win32'
+    ? path.join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe')
+    : process.platform === 'darwin'
+      ? path.join(ROOT, 'node_modules', 'electron', 'dist', 'Electron.app', 'Contents', 'MacOS', 'Electron')
+      : path.join(ROOT, 'node_modules', 'electron', 'dist', 'electron');
   checks.push(check('Electron binary', fs.existsSync(electron), electron));
 
   for (const asset of ['icon.svg', 'icon-1024.png', 'icon.icns']) {
@@ -67,7 +81,7 @@ async function doctor() {
   const claude = path.join(os.homedir(), '.local', 'bin', 'claude');
   checks.push(check('Claude Code (optional provider)', fs.existsSync(claude), claude));
 
-  const userData = path.join(os.homedir(), 'Library', 'Application Support', 'CAELIX');
+  const userData = userDataDir();
   const keyFile = path.join(userData, 'keys.enc');
   checks.push(check('Encrypted key store', !fs.existsSync(keyFile) || fs.statSync(keyFile).size > 0, keyFile));
 
@@ -190,7 +204,7 @@ async function run(args) {
   const { McpManager } = require('./engine/mcp');
   const { HooksManager } = require('./engine/hooks');
   const { AgentRegistry } = require('./engine/agents');
-  const appSupport = path.join(os.homedir(), 'Library', 'Application Support', 'CAELIX');
+  const appSupport = userDataDir();
   const mcp = new McpManager(appSupport);
   const hooks = new HooksManager(appSupport);
   const agents = new AgentRegistry(appSupport);

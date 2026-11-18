@@ -68,6 +68,10 @@ button { cursor: pointer; }
 }
 
 .tb-left, .tb-right { display: flex; align-items: center; gap: 8px; -webkit-app-region: no-drag; }
+
+/* Windows draws its own minimise/maximise/close buttons over the top bar
+   (titleBarOverlay), so reserve that space and drop the traffic-light gap. */
+html[data-platform="win32"] .topbar { padding-left: 14px; padding-right: 150px; }
 .tb-left { justify-self: start; min-width: 0; }
 .tb-right { justify-self: end; }
 .tb-center { justify-self: center; min-width: 0; max-width: 380px; }
