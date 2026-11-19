@@ -108,15 +108,25 @@ const NAMED = {
   lightblue: [173, 216, 230, 1],
   cyan: [0, 255, 255, 1],
   teal: [0, 128, 128, 1],
+  emerald: [16, 185, 129, 1],
+  aqua: [0, 255, 255, 1],
+  sky: [56, 189, 248, 1],
+  coral: [255, 127, 80, 1],
   purple: [128, 0, 128, 1],
   indigo: [75, 0, 130, 1],
   red: [255, 0, 0, 1],
   crimson: [220, 20, 60, 1],
+  rose: [244, 63, 94, 1],
+  magenta: [255, 0, 255, 1],
   green: [0, 128, 0, 1],
   orange: [255, 165, 0, 1],
   gold: [255, 215, 0, 1],
+  yellow: [250, 204, 21, 1],
   pink: [255, 192, 203, 1],
   violet: [238, 130, 238, 1],
+  cream: [255, 253, 240, 1],
+  charcoal: [31, 41, 55, 1],
+  slate: [100, 116, 139, 1],
 };
 
 function clamp(value, min, max) {
@@ -263,7 +273,103 @@ function matchesBody(selector) {
 
 // ---- the check ------------------------------------------------------------
 
+function checkSvgDesign(source, { file = 'graphic.svg', goals = [] } = {}) {
+  const raw = String(source || '');
+  const hasRoot = /<svg\b[^>]*>/i.test(raw) && /<\/svg>/i.test(raw);
+  const viewBoxMatch = /<svg\b[^>]*\bviewBox\s*=\s*["']([^"']+)["']/i.exec(raw);
+  const shapes = (raw.match(/<(path|circle|rect|polygon|polyline|ellipse|line)\b/gi) || []).length;
+  const texts = (raw.match(/<text\b/gi) || []).length;
+  const gradients = (raw.match(/<(linearGradient|radialGradient)\b/gi) || []).length;
+  const filters = (raw.match(/<filter\b/gi) || []).length;
+  const hasTitle = /<(title|desc)\b/i.test(raw) || /\baria-label\s*=/i.test(raw);
+  const cssInside = readCss(raw, file);
+  const svgAttrs = raw.match(/\b(?:fill|stroke|stop-color|background)\s*[:=]\s*["']?([^"';>]+)/gi) || [];
+  const colors = [
+    ...colorsIn(cssInside),
+    ...svgAttrs.flatMap((token) => colorsIn(token)),
+  ].filter((c) => c.a > 0);
+  const palette = [];
+  const seenHex = new Set();
+  for (const c of colors) {
+    const label = colorLabel(c);
+    if (!seenHex.has(label)) {
+      seenHex.add(label);
+      palette.push({ color: c, label, hsl: toHsl(c) });
+    }
+  }
+  const issues = [];
+  if (!hasRoot) issues.push('Malformed SVG: missing opening <svg> or closing </svg> tag.');
+  if (!viewBoxMatch) issues.push('SVG has no viewBox attribute — scaling across containers will clip or distort.');
+  if (shapes + texts === 0) issues.push('SVG contains zero visible shapes or text primitives.');
+
+  const HUE_RANGES = {
+    blue: [195, 265], navy: [195, 265], indigo: [225, 275], sky: [185, 220],
+    teal: [150, 195], cyan: [165, 200], aqua: [165, 200], emerald: [130, 175], green: [80, 165],
+    purple: [255, 300], violet: [255, 300], magenta: [290, 335], pink: [300, 350], rose: [330, 360],
+    red: [340, 20], crimson: [340, 15], orange: [15, 45], gold: [35, 60], amber: [30, 55], yellow: [42, 68],
+  };
+  const withinHue = (h, r) => (r[0] <= r[1] ? h >= r[0] && h <= r[1] : h >= r[0] || h <= r[1]);
+  const words = [...new Set(String(goals.join(' ')).toLowerCase().split(/[^a-z]+/).filter(Boolean))];
+  const goalResults = [];
+  for (const word of words) {
+    if (HUE_RANGES[word]) {
+      const range = HUE_RANGES[word];
+      const match = palette.some((p) => {
+        const chroma = (Math.max(p.color.r, p.color.g, p.color.b) - Math.min(p.color.r, p.color.g, p.color.b)) * p.color.a;
+        return chroma >= 14 && p.hsl.s > 0.14 && withinHue(p.hsl.h, range);
+      });
+      goalResults.push({ goal: word, pass: match, detail: match ? `palette includes ${word}` : `no ${word} fill/stroke/stop found in SVG` });
+      if (!match) issues.push(`Goal "${word}" is not met: no ${word} colour found in SVG palette.`);
+    } else if (word === 'gradient') {
+      const pass = gradients > 0;
+      goalResults.push({ goal: word, pass, detail: `${gradients} SVG gradient(s)` });
+      if (!pass) issues.push('Goal "gradient" is not met: 0 SVG linearGradient/radialGradient definitions.');
+    } else if (word === 'shadow' || word === 'depth' || word === 'glow') {
+      const pass = gradients > 0 || filters > 0 || /drop-shadow|box-shadow/i.test(cssInside);
+      goalResults.push({ goal: word, pass, detail: `${gradients} gradient(s), ${filters} filter(s)` });
+      if (!pass) issues.push(`Goal "${word}" is not met: add SVG gradients or <filter> depth/glow.`);
+    } else if (word === 'minimal' || word === 'minimalist' || word === 'clean') {
+      const pass = hasRoot && Boolean(viewBoxMatch) && shapes > 0 && palette.length <= 10;
+      goalResults.push({ goal: word, pass, detail: `${shapes} shape(s), ${palette.length} unique colour(s)` });
+      if (!pass) issues.push(`Goal "${word}" is not met: keep SVG clean with crisp shapes and restrained palette.`);
+    }
+  }
+  const score = Math.max(0, Math.min(100, 100 - issues.length * 15));
+  return {
+    file,
+    kind: 'svg',
+    ok: issues.length === 0,
+    score,
+    goals: goalResults,
+    metrics: {
+      bytes: raw.length,
+      cssBytes: cssInside.length,
+      viewport: Boolean(viewBoxMatch),
+      viewBox: viewBoxMatch ? viewBoxMatch[1] : null,
+      shapes,
+      texts,
+      gradients,
+      filters,
+      hasTitle,
+      paletteCount: palette.length,
+      background: palette[0]?.label || 'transparent',
+      text: 'svg',
+      contrast: null,
+      backdropFilters: [],
+      translucentSurfaces: 0,
+      variables: 0,
+      hoverRules: 0,
+      focusVisibleRules: 0,
+      responsiveMediaQueries: 0,
+      mediaQueries: 0,
+    },
+    issues,
+  };
+}
+
 function checkDesign(source, { file = 'index.html', goals = [] } = {}) {
+  const isSvgFile = /\.svg$/i.test(String(file || '')) || (/<svg\b/i.test(source) && !/<(html|body|style)\b/i.test(source));
+  if (isSvgFile) return checkSvgDesign(source, { file, goals });
   let doc = '';
   let css = '';
   if (/<html|<body|<style/i.test(source)) {
@@ -431,9 +537,13 @@ function checkDesign(source, { file = 'index.html', goals = [] } = {}) {
 
   // ---- goal evaluation ----
   const HUE_RANGES = {
-    blue: [195, 265], navy: [195, 265], teal: [150, 195], cyan: [165, 200],
-    green: [80, 165], purple: [255, 300], violet: [255, 300], pink: [300, 350],
-    red: [340, 20], orange: [15, 45], gold: [35, 60], amber: [30, 55],
+    blue: [195, 265], navy: [195, 265], indigo: [225, 275], sky: [185, 220],
+    teal: [150, 195], cyan: [165, 200], aqua: [165, 200],
+    emerald: [130, 175], green: [80, 165],
+    purple: [255, 300], violet: [255, 300], magenta: [290, 335],
+    pink: [300, 350], rose: [330, 360],
+    red: [340, 20], crimson: [340, 15],
+    orange: [15, 45], gold: [35, 60], amber: [30, 55], yellow: [42, 68],
   };
   const withinHue = (hue, range) => (range[0] <= range[1]
     ? hue >= range[0] && hue <= range[1]
@@ -442,6 +552,7 @@ function checkDesign(source, { file = 'index.html', goals = [] } = {}) {
   const results = [];
   const words = [...new Set(String(goals.join(' ')).toLowerCase().split(/[^a-z]+/).filter(Boolean))];
   const wantsBackdropColour = words.includes('dark') || words.includes('light') || words.includes('liquid') || words.includes('glass');
+  const maxAccentSat = accents.length ? Math.max(...accents.map((a) => a.hsl.s)) : 0;
   for (const word of words) {
     if (HUE_RANGES[word]) {
       const range = HUE_RANGES[word];
@@ -465,6 +576,18 @@ function checkDesign(source, { file = 'index.html', goals = [] } = {}) {
       results.push({ goal: word, pass: metrics.backgroundLightness !== null && metrics.backgroundLightness < 0.45, detail: `background ${metrics.background} (lightness ${metrics.backgroundLightness ?? 'unknown'})` });
     } else if (word === 'light') {
       results.push({ goal: word, pass: metrics.backgroundLightness !== null && metrics.backgroundLightness > 0.7, detail: `background ${metrics.background}` });
+    } else if (word === 'warm') {
+      const hasWarm = [...backgroundColors, ...accents.map((a) => a.color)].some((c) => {
+        const hsl = toHsl(c);
+        return effectiveChroma(c) >= 16 && (withinHue(hsl.h, [340, 65]));
+      });
+      results.push({ goal: word, pass: hasWarm, detail: hasWarm ? 'warm colour palette present' : 'no warm red/orange/amber tones found' });
+    } else if (word === 'cool') {
+      const hasCool = [...backgroundColors, ...accents.map((a) => a.color)].some((c) => {
+        const hsl = toHsl(c);
+        return effectiveChroma(c) >= 16 && withinHue(hsl.h, [150, 290]);
+      });
+      results.push({ goal: word, pass: hasCool, detail: hasCool ? 'cool colour palette present' : 'no cool blue/teal/indigo tones found' });
     } else if (word === 'glass' || word === 'glassmorphism' || word === 'translucent' || word === 'frosted') {
       const pass = metrics.backdropFilters.length > 0
         && metrics.maxBlurPx >= 4
@@ -494,6 +617,30 @@ function checkDesign(source, { file = 'index.html', goals = [] } = {}) {
           ? `blur ${metrics.maxBlurPx}px, translucent glass with crisp border, shadow & gradient backdrop`
           : missing.join('; '),
       });
+    } else if (word === 'minimal' || word === 'minimalist' || word === 'clean') {
+      const pass = Boolean(metrics.fonts) && (metrics.contrast === null || metrics.contrast >= 4.5) && Boolean(background);
+      results.push({ goal: word, pass, detail: `font ${metrics.fonts || 'unset'}, contrast ${metrics.contrast ?? 'unset'}:1` });
+    } else if (word === 'modern' || word === 'sleek') {
+      const pass = metrics.variables > 0 && metrics.transitions > 0 && Boolean(metrics.radius) && metrics.hoverRules > 0;
+      results.push({ goal: word, pass, detail: `${metrics.variables} CSS var(s), ${metrics.transitions} transition(s), radius ${metrics.radius || 'none'}` });
+    } else if (word === 'bento' || word === 'grid' || word === 'dashboard') {
+      const pass = (metrics.grid > 0 || metrics.flex >= 2) && (metrics.shadows > 0 || metrics.translucentSurfaces > 0) && metrics.responsiveMediaQueries > 0;
+      results.push({ goal: word, pass, detail: `${metrics.grid} grid / ${metrics.flex} flex rule(s), ${metrics.shadows} shadow(s)` });
+    } else if (word === 'neon' || word === 'cyberpunk' || word === 'synthwave' || word === 'arcade') {
+      const pass = metrics.backgroundLightness !== null && metrics.backgroundLightness < 0.35 && (maxAccentSat >= 0.65 || metrics.shadows > 0);
+      results.push({ goal: word, pass, detail: `dark canvas lightness ${metrics.backgroundLightness ?? 'unknown'}, max accent sat ${maxAccentSat.toFixed(2)}, ${metrics.shadows} glow/shadow(s)` });
+    } else if (word === 'neumorphic' || word === 'clay' || word === 'tactile') {
+      const pass = metrics.shadows > 0 && Boolean(metrics.radius);
+      results.push({ goal: word, pass, detail: `${metrics.shadows} shadow(s), radius ${metrics.radius || 'none'}` });
+    } else if (word === 'pastel' || word === 'soft') {
+      const pass = metrics.backgroundLightness !== null && metrics.backgroundLightness >= 0.55 && Boolean(metrics.radius);
+      results.push({ goal: word, pass, detail: `canvas lightness ${metrics.backgroundLightness ?? 'unknown'}, radius ${metrics.radius || 'none'}` });
+    } else if (word === 'monochrome' || word === 'editorial') {
+      const pass = Boolean(metrics.fonts) && metrics.contrast !== null && metrics.contrast >= 4.5;
+      results.push({ goal: word, pass, detail: `font ${metrics.fonts || 'unset'}, contrast ${metrics.contrast ?? 'unset'}:1` });
+    } else if (word === 'animated' || word === 'interactive') {
+      const pass = (metrics.transitions + metrics.animations) > 0 && metrics.hoverRules > 0;
+      results.push({ goal: word, pass, detail: `${metrics.transitions} transition(s), ${metrics.animations} keyframe(s), ${metrics.hoverRules} hover rule(s)` });
     } else if (word === 'responsive' || word === 'mobile') {
       const pass = metrics.viewport && metrics.responsiveMediaQueries > 0;
       results.push({ goal: word, pass, detail: `viewport ${metrics.viewport ? 'yes' : 'no'}, ${metrics.responsiveMediaQueries} layout media quer${metrics.responsiveMediaQueries === 1 ? 'y' : 'ies'}, flex/grid rules ${metrics.flex + metrics.grid}` });
@@ -504,7 +651,7 @@ function checkDesign(source, { file = 'index.html', goals = [] } = {}) {
       results.push({ goal: word, pass: Boolean(metrics.radius) && !/^0(px|rem|%)?$/.test(metrics.radius), detail: `radius ${metrics.radius || 'none'}` });
     } else if (word === 'gradient') {
       results.push({ goal: word, pass: metrics.gradients > 0, detail: `${metrics.gradients} gradient(s)` });
-    } else if (word === 'shadow' || word === 'depth') {
+    } else if (word === 'shadow' || word === 'depth' || word === 'glow') {
       results.push({ goal: word, pass: metrics.shadows > 0, detail: `${metrics.shadows} shadow rule(s)` });
     }
   }
@@ -553,10 +700,13 @@ function checkDesign(source, { file = 'index.html', goals = [] } = {}) {
 }
 
 const KNOWN_GOAL_WORDS = new Set([
-  'dark', 'light', 'blue', 'navy', 'teal', 'cyan', 'green', 'purple', 'violet',
-  'pink', 'red', 'orange', 'gold', 'amber', 'liquid', 'glass', 'glassmorphism',
-  'translucent', 'frosted', 'responsive', 'mobile', 'accessible', 'contrast',
-  'rounded', 'gradient', 'shadow', 'depth',
+  'dark', 'light', 'warm', 'cool', 'blue', 'navy', 'indigo', 'sky', 'teal', 'cyan', 'aqua',
+  'emerald', 'green', 'purple', 'violet', 'magenta', 'pink', 'rose', 'red', 'crimson',
+  'orange', 'gold', 'amber', 'yellow', 'liquid', 'glass', 'glassmorphism', 'translucent',
+  'frosted', 'minimal', 'minimalist', 'clean', 'modern', 'sleek', 'editorial', 'bento',
+  'grid', 'dashboard', 'neon', 'cyberpunk', 'synthwave', 'arcade', 'neumorphic', 'clay',
+  'tactile', 'pastel', 'soft', 'monochrome', 'animated', 'interactive', 'responsive',
+  'mobile', 'accessible', 'contrast', 'rounded', 'gradient', 'shadow', 'depth', 'glow',
 ]);
 
 // Pull visual design keywords straight from the user's prompt so edit hints and
@@ -577,16 +727,16 @@ function summarise(report) {
   return `design ${report.score}/100 — ${report.issues.length} issue(s): ${top}${report.issues.length > 3 ? ' …' : ''}`;
 }
 
-// Appended to an edit result so a plain page or missed visual brief cannot pass unnoticed.
+// Appended to an edit result so a plain page, broken SVG, or missed visual brief cannot pass unnoticed.
 function designHint(root, files, maxFiles = 2, goals = []) {
   const lines = [];
   const activeGoals = Array.isArray(goals) ? goals.filter(Boolean) : [];
   for (const file of (Array.isArray(files) ? files : [files]).slice(0, maxFiles)) {
-    if (!/\.(html?|css)$/i.test(file)) continue;
+    if (!/\.(html?|css|svg)$/i.test(file)) continue;
     let source;
     try { source = fs.readFileSync(file, 'utf8'); } catch { continue; }
     if (source.length > 400000) continue;
-    if (/\.html?$/i.test(file) && !/<(body|style)/i.test(source)) continue;
+    if (/\.html?$/i.test(file) && !/<(body|style|svg|canvas)/i.test(source)) continue;
     try {
       const report = checkDesign(source, { file, goals: activeGoals });
       if (report.issues.length) {
@@ -596,7 +746,7 @@ function designHint(root, files, maxFiles = 2, goals = []) {
   }
   if (!lines.length) return '';
   const briefHint = activeGoals.length ? ` (brief: ${activeGoals.join(', ')})` : '';
-  return `\nDesign check${briefHint} (static analysis of the CSS just written):\n${lines.join('\n')}\nFix every reported issue above and verify cleanly with design_check before finishing.`;
+  return `\nDesign check${briefHint} (static analysis of the UI/SVG just written):\n${lines.join('\n')}\nFix every reported issue above and verify with design_check and render_preview before finishing.`;
 }
 
 module.exports = { checkDesign, extractDesignGoals, summarise, designHint, parseColorToken, toHsl, contrastRatio };

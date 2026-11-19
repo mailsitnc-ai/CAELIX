@@ -11,6 +11,7 @@ const { diffLines } = require('./diff');
 const { diagnose } = require('./diagnostics');
 const documents = require('./documents');
 const { checkDesign, summarise, designHint } = require('./design');
+const { renderPreview } = require('./preview');
 
 const MAX_OUTPUT = 60_000;
 const READ_FILE_DEFAULT_LINES = 300;
@@ -129,16 +130,30 @@ function toolDefinitions(root) {
     },
     {
       name: 'design_check',
-      description: 'Check whether a local HTML/CSS page actually follows the visual brief (colour, material, layout, readability) before you call the work done. Pass the exact words the user used as goals, for example ["dark","blue","glass","responsive","accessible"]. It reads the CSS statically and reports the real background colour, text colour and contrast ratio, whether translucent blur surfaces exist, and what is missing. Fix every reported issue, then run it again. This is static analysis, not a screenshot: styles applied later by JavaScript are not seen.',
+      description: 'Check whether a local HTML, CSS, or SVG graphic/page actually follows the visual brief (colour, material, layout, readability, vector shapes) before you call the work done. Pass the visual style words from the request as goals, for example ["minimal","clean","responsive"] or ["dark","blue","liquid","glass"]. Fix every reported issue, then run it again.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'HTML or CSS file to inspect, relative to the project.' },
+          path: { type: 'string', description: 'HTML, CSS, or SVG file to inspect, relative to the project.' },
           goals: {
             type: 'array',
-            description: 'Visual words from the request: dark, light, blue, navy, teal, green, purple, pink, red, orange, gold, liquid, glass, glassmorphism, translucent, frosted, responsive, mobile, accessible, contrast, rounded, gradient, shadow, depth.',
+            description: 'Visual words from the request: dark, light, warm, cool, blue, navy, indigo, teal, cyan, emerald, green, purple, pink, orange, gold, liquid, glass, frosted, minimal, modern, bento, dashboard, editorial, neon, neumorphic, pastel, monochrome, animated, responsive, accessible, rounded, gradient, shadow.',
             items: { type: 'string' },
           },
+        },
+        required: ['path'],
+      },
+    },
+    {
+      name: 'render_preview',
+      description: 'Render a local HTML or SVG file in headless Chromium at desktop and mobile sizes to catch layout overflow, blank <canvas> or empty <svg> graphics, runtime console errors, weak typographic hierarchy, or opaque glass fills, and return a screenshot to inspect visually. No approval needed.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'HTML or SVG file relative to the project.' },
+          width: { type: 'integer', description: 'Desktop viewport width in px (default 1280).' },
+          height: { type: 'integer', description: 'Desktop viewport height in px (default 800).' },
+          screenshot: { type: 'boolean', description: 'Include PNG screenshot for visual inspection (default true).' },
         },
         required: ['path'],
       },
@@ -508,6 +523,7 @@ class ToolRunner {
       case 'write_file': return this.writeFile(input);
       case 'write_document': return this.writeDocument(input);
       case 'design_check': return this.designCheck(input);
+      case 'render_preview': return this.renderPreviewTool(input);
       case 'edit_file': return this.editFile(input);
       case 'list_dir': return this.listDir(input);
       case 'glob': return this.glob(input);
@@ -614,13 +630,12 @@ class ToolRunner {
     return { output: `Wrote ${relative} (${diff.additions} added, ${diff.deletions} removed).${diagnose(this.root, [file])}${designHint(this.root, [file], 2, this.promptGoals)}`, change: { file: relative, before, after, existed, ...diff } };
   }
 
-  // Reads the CSS the page actually contains and reports whether the visual
-  // brief was met. Static analysis, so no browser and no screenshot needed.
+  // Reads the CSS or SVG graphics written and reports whether the visual brief was met.
   async designCheck(input) {
     const file = this.resolvePath(input.path, { mustExist: true });
     const relative = path.relative(this.root, file);
     const stat = await fsp.stat(file);
-    if (stat.isDirectory()) throw new Error('design_check needs an HTML or CSS file, not a folder.');
+    if (stat.isDirectory()) throw new Error('design_check needs an HTML, CSS, or SVG file, not a folder.');
     if (stat.size > 1_500_000) throw new Error('That file is too large to analyse.');
     const source = await fsp.readFile(file, 'utf8');
     const explicit = Array.isArray(input.goals) ? input.goals.map(String) : [];
@@ -630,14 +645,57 @@ class ToolRunner {
     if (report.goals.length) {
       lines.push('Brief:', report.goals.map((goal) => `${goal.goal} ${goal.pass ? 'met' : 'NOT met'} (${goal.detail})`).join(' · '));
     }
-    lines.push(`Measured: background ${report.metrics.background}, text ${report.metrics.text}, contrast ${report.metrics.contrast ?? 'unset'}:1, ${report.metrics.backdropFilters.length} backdrop-filter, ${report.metrics.translucentSurfaces} translucent surface(s), ${report.metrics.variables} CSS variable(s), ${report.metrics.hoverRules} hover / ${report.metrics.focusVisibleRules} focus rule(s), ${report.metrics.mediaQueries} media quer${report.metrics.mediaQueries === 1 ? 'y' : 'ies'}.`);
+    if (report.kind === 'svg') {
+      lines.push(`Measured SVG: viewBox ${report.metrics.viewBox || 'missing'}, ${report.metrics.shapes} shape(s), ${report.metrics.texts} text(s), ${report.metrics.gradients} gradient(s), ${report.metrics.filters} filter(s), ${report.metrics.paletteCount} palette colour(s).`);
+    } else {
+      lines.push(`Measured: background ${report.metrics.background}, text ${report.metrics.text}, contrast ${report.metrics.contrast ?? 'unset'}:1, ${report.metrics.backdropFilters.length} backdrop-filter, ${report.metrics.translucentSurfaces} translucent surface(s), ${report.metrics.variables} CSS variable(s), ${report.metrics.hoverRules} hover / ${report.metrics.focusVisibleRules} focus rule(s), ${report.metrics.mediaQueries} media quer${report.metrics.mediaQueries === 1 ? 'y' : 'ies'}.`);
+    }
     if (report.issues.length) {
       lines.push('Issues to fix:');
       for (const issue of report.issues) lines.push(`- ${issue}`);
     } else {
-      lines.push('No issues found: the page is styled, responsive and readable as written.');
+      lines.push(report.kind === 'svg'
+        ? 'No issues found: SVG vector structure and palette look cleanly composed.'
+        : 'No issues found: the page is styled, responsive and readable as written.');
     }
     return { output: lines.join('\n'), design: report };
+  }
+
+  // Renders any local HTML/SVG page or graphic in Chromium to verify layout,
+  // canvases, SVGs, computed styles, and capture a live PNG screenshot.
+  async renderPreviewTool(input) {
+    const file = this.resolvePath(input.path, { mustExist: true });
+    const relative = path.relative(this.root, file);
+    if (!/\.(html?|svg)$/i.test(file)) throw new Error('render_preview supports .html, .htm, and .svg files.');
+    const width = Math.min(1920, Math.max(320, Number(input.width) || 1280));
+    const height = Math.min(1200, Math.max(320, Number(input.height) || 800));
+    const capture = input.screenshot !== false;
+    const preview = await renderPreview({ file, root: this.root, width, height, capture });
+    const m = preview.metrics;
+    const lines = [
+      `Rendered ${relative} in Chromium at ${width}x${height} (${preview.ok ? 'PASS' : `${preview.issues.length} visual issue(s)`})`,
+      `Layout: scroll ${m.scrollWidth}x${m.docHeight} (desktop overflow ${m.overflowPx}px, mobile 390px overflow ${preview.mobileOverflowPx}px), ${m.interactiveCount} interactive control(s).`,
+      `Typography & surface: body ${m.bodyFontSize}px (${m.fontFamily.split(',')[0].replace(/["']/g, '').trim() || 'default'}), h1/body scale ${m.headingScale ?? 'n/a'}x, bodyBg ${m.bodyBg}.`,
+      `Graphics: ${m.svgCount} SVG(s) (${m.emptySvgs} empty), ${m.canvasCount} canvas(es) (${m.blankCanvases} blank), ${m.glassPanels.length} computed translucent glass panel(s) (${m.opaqueGlassPanels.length} opaque), ${m.brokenImages} broken img.`,
+    ];
+    if (preview.issues.length) {
+      lines.push('Issues to fix:');
+      for (const issue of preview.issues) lines.push(`- ${issue}`);
+    } else {
+      lines.push('Visual render check clean — inspect the attached screenshot to verify overall craft and balance.');
+    }
+    const result = {
+      output: lines.join('\n'),
+      preview: {
+        ok: preview.ok,
+        issues: preview.issues,
+        mobileOverflowPx: preview.mobileOverflowPx,
+        metrics: preview.metrics,
+      },
+      meta: { isImage: Boolean(preview.imageDataUrl), mimeType: 'image/png', bytes: preview.pngBytes },
+    };
+    if (preview.imageDataUrl) result.imageDataUrl = preview.imageDataUrl;
+    return result;
   }
 
   // Real document output (PDF/OOXML/ODF/EPUB/…). Binary files never go through

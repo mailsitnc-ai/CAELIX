@@ -78,6 +78,7 @@ const TOOL_LABELS = {
   web_search: 'Search', notebook_edit: 'Notebook', skill: 'Skill', tool_search: 'Tool Search',
   write_document: 'Document',
   design_check: 'Design',
+  render_preview: 'Preview',
   multi_edit: 'Multi-edit', task_start: 'Task', task_list: 'Tasks', task_stop: 'Stop task',
   ask_user: 'Question', present_plan: 'Plan', subagent: 'Subagent',
 };

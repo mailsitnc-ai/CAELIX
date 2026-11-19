@@ -1,5 +1,18 @@
 # CAELIX changelog
 
+## 0.1.44 — Universal visual & graphics engine: Chromium `render_preview`, SVG/Canvas checks & multi-style design awareness
+
+- **New `render_preview` tool (26th built-in tool, `src/engine/preview.js`):**
+  - Renders any in-project `.html` or `.svg` file in an offscreen sandboxed Chromium window at desktop (`1280×800`) and mobile (`390×844`) viewports cleanly offline.
+  - Audits real post-cascade rendered output: catches desktop/mobile horizontal overflow, blank `<canvas>` elements (pixel-sampled), empty/zero-size `<svg>` graphics, broken `<img>` tags, flat `h1`/body heading scales, computed opaque `backdrop-filter` fills, and uncaught runtime console errors.
+  - Captures and returns a PNG screenshot (`imageDataUrl`) so vision-capable models inspect the actual rendered result visually before declaring design work complete (while text-only models keep full structural/pixel telemetry cleanly).
+- **Broader visual & graphics analysis (`src/engine/design.js`):**
+  - Added `checkSvgDesign()` for standalone `.svg` vector graphics (`viewBox`, balanced XML, primitive/shape count, `<defs>` gradients/filters, `<title>` accessibility, and colour palette goal verification).
+  - Expanded aesthetic goal support beyond liquid glass to cover general web/graphics styles (`minimal`, `clean`, `modern`, `sleek`, `bento`, `grid`, `dashboard`, `editorial`, `neon`, `cyberpunk`, `synthwave`, `arcade`, `neumorphic`, `clay`, `tactile`, `pastel`, `monochrome`, `warm`, `cool`, `animated`, `interactive`, plus `indigo`, `emerald`, `sky`, `rose`, `magenta`, `yellow`, `aqua`).
+- **Universal art direction & finish gate (`src/engine/index.js`, `src/engine/tools.js`):**
+  - Upgraded `systemPrompt()` across web UIs, bento dashboards, SVG vector illustrations/logos, and HTML5 Canvas scenes/games (60/30/10 colour discipline, typographic hierarchy, spacing rhythm, material authenticity, responsive + reduced-motion `@media`, and mandatory `design_check` + `render_preview` visual verification).
+  - Extended `unresolvedDesign` in `Engine.send()` to enforce `.svg` design hints and failing `render_preview` checks automatically before stopping.
+
 ## 0.1.43 — Liquid glass depth, perceptible colour & automatic visual finish gate
 
 - **Fixed false-positive `100/100` on flat/pitch-black pages (`src/engine/design.js`):**

@@ -472,7 +472,11 @@ button:hover{transform:translateY(-1px)} button:focus-visible{outline:2px solid 
       const strong = await runner.execute('design_check', { path: 'glass.html', goals: ['dark', 'blue', 'liquid', 'glass', 'responsive', 'accessible'] });
       if (!strong.design.ok) throw new Error(`The glass page failed: ${strong.design.issues.join(' | ')}`);
       if (strong.design.score !== 100) throw new Error(`Expected 100/100, got ${strong.design.score}.`);
-      return 'plain page flagged, dark-blue liquid glass page 100/100';
+      const rendered = await runner.execute('render_preview', { path: 'glass.html' });
+      if (!rendered.preview?.ok || !rendered.imageDataUrl?.startsWith('data:image/png;base64,')) {
+        throw new Error(`render_preview failed: ${rendered.output}`);
+      }
+      return 'plain page flagged, dark-blue liquid glass page 100/100 + rendered screenshot';
     });
 
     await step('background task starts, lists and stops', async () => {
