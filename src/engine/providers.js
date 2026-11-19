@@ -527,16 +527,58 @@ async function readError(response, provider = null) {
   return err;
 }
 
+// Resolve the stall budgets for a provider. Exported so the shipped test suite
+// can pin the policy without waiting out real timers.
+//
+// Three phases, because the faults are different:
+//   firstByteMs    nothing has arrived yet — a cold start, a queue, or a model
+//                  composing a long tool call entirely before streaming
+//   reasoningMs    reasoning has arrived but no answer yet — the model is
+//                  demonstrably working, so give it room to finish composing
+//   idleMs         answer text or tool-call deltas have started, then stopped —
+//                  a short silence here is a real fault
+//   hardSilenceMs  absolute ceiling for a keepalive-only connection, so a
+//                  request that will never answer cannot sit forever
+function resolveTimeouts(provider, options = {}) {
+  const explicit = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 0;
+  const envPin = Number(process.env.CAELIX_REQUEST_TIMEOUT_MS) > 0
+    ? Number(process.env.CAELIX_REQUEST_TIMEOUT_MS)
+    : 0;
+  const pinned = Boolean(explicit || envPin);
+  const slow = provider === 'numes';
+  const idleMs = explicit || envPin || (slow ? 60_000 : 45_000);
+  const reasoningMs = Number(process.env.CAELIX_REASONING_TIMEOUT_MS)
+    || (pinned ? idleMs : (slow ? 150_000 : 120_000));
+  const firstByteMs = Number(process.env.CAELIX_FIRST_BYTE_TIMEOUT_MS)
+    || (pinned ? idleMs : (slow ? 150_000 : 120_000));
+  // A keepalive proves the socket is alive but not that work is happening, so
+  // it may extend the wait — bounded, never indefinitely.
+  const hardSilenceMs = firstByteMs + Math.min(firstByteMs, 60_000);
+  // Absolute ceiling for one request. A model that dribbles a reasoning token
+  // every few seconds resets the gap watchdog indefinitely, so gap detection
+  // alone cannot bound the wait.
+  const totalMs = Number(process.env.CAELIX_MAX_REQUEST_MS)
+    || (pinned ? Math.max(idleMs * 20, 10_000) : 20 * 60_000);
+  return { idleMs, reasoningMs, firstByteMs, hardSilenceMs, totalMs, pinned };
+}
+
 async function streamOpenAICompatible(options) {
   const {
     provider, model, apiKey, messages, tools, signal, onDelta, onStatus,
     compactToolSchemas = true,
     stripImages = false,
     maxTokens = null,
-    timeoutMs = Number(process.env.CAELIX_REQUEST_TIMEOUT_MS) || (provider === 'numes' ? 60_000 : 35_000),
+    timeoutMs = null,
   } = options;
   const meta = PROVIDERS[provider];
   if (!meta || !meta.baseUrl) throw new Error(`Unknown provider: ${provider}`);
+
+  // See resolveTimeouts: the pre-output budget has to be generous because a
+  // large model may compose an entire tool call before streaming a byte, while
+  // silence after answer tokens have started is a real fault. Setting
+  // CAELIX_REQUEST_TIMEOUT_MS (or an explicit timeoutMs) pins every phase,
+  // which keeps tests deterministic.
+  const { idleMs, reasoningMs, firstByteMs, hardSilenceMs, totalMs } = resolveTimeouts(provider, { timeoutMs });
 
   const headers = {
     'content-type': 'application/json',
@@ -568,23 +610,56 @@ async function streamOpenAICompatible(options) {
 
   const requestAbort = new AbortController();
   let timedOut = false;
+  const streamStartAt = Date.now();
+  const deadlineAt = streamStartAt + totalMs;
+  let sawOutput = false;
+  let sawAnswer = false;
+  let lastOutputAt = Date.now();
+  let stallBudget = firstByteMs;
   let stallTimer = null;
   const resetStall = () => {
     if (stallTimer) clearTimeout(stallTimer);
+    const remaining = deadlineAt - Date.now();
+    if (remaining <= 0) {
+      timedOut = true;
+      requestAbort.abort();
+      return;
+    }
     stallTimer = setTimeout(() => {
       timedOut = true;
       requestAbort.abort();
-    }, timeoutMs);
+    }, Math.min(stallBudget, remaining));
+  };
+  // Real output moves the watchdog to the budget that matches what just
+  // arrived: reasoning means the model is still composing, answer tokens mean
+  // any further silence is a fault.
+  const noteOutput = (phase) => {
+    sawOutput = true;
+    if (phase === 'answer') sawAnswer = true;
+    lastOutputAt = Date.now();
+    stallBudget = phase === 'reasoning' ? reasoningMs : idleMs;
+    resetStall();
   };
   const onCallerAbort = () => requestAbort.abort();
   if (signal?.aborted) throw new Error('Cancelled.');
   if (signal) signal.addEventListener('abort', onCallerAbort, { once: true });
 
   let waitNoticeTimer = null;
+  let progressTimer = null;
   if (typeof onStatus === 'function') {
     waitNoticeTimer = setTimeout(() => {
       onStatus({ stage: 'waiting', message: `Waiting for ${meta.name} (${model})…` });
     }, 2000);
+    // A big model can work for over a minute before it emits anything, and a
+    // still window must never look like a frozen app. Report real progress.
+    progressTimer = setInterval(() => {
+      const silent = Date.now() - lastOutputAt;
+      if (silent < 12_000) return;
+      onStatus({
+        stage: sawAnswer ? 'writing' : 'thinking',
+        message: `${sawAnswer ? 'Still writing' : 'Still generating'} — ${Math.round(silent / 1000)}s since the last token…`,
+      });
+    }, 12_000);
   }
   resetStall();
 
@@ -599,9 +674,12 @@ async function streamOpenAICompatible(options) {
       });
     } catch (error) {
       if (timedOut) {
-        const err = new Error(`${meta.name} (${model}) did not respond within ${Math.round(timeoutMs / 1000)}s. The model may be cold-starting, queued, or unavailable for your key — try switching models or clicking Test in Keys.`);
+        const waited = Math.round((Date.now() - streamStartAt) / 1000);
+        const err = new Error(`${meta.name} (${model}) did not respond within ${waited}s. The model may be cold-starting, queued, or unavailable for your key — CAELIX will try another model.`);
         err.status = 408;
-        err.noRetry = true;
+        // Mark as a stall, not a dead end: the engine fails over to another
+        // model for this turn and reports the switch to the user.
+        err.stall = true;
         throw err;
       }
       if (signal?.aborted) throw new Error('Cancelled.');
@@ -627,9 +705,15 @@ async function streamOpenAICompatible(options) {
       if (!trimmed) return;
       if (trimmed.startsWith(':')) {
         // Keepalive SSE comments mean the socket is open, not that tokens are
-        // flowing — do not reset stallTimer forever while queued with 0 output.
-        if (!text && !reasoningChars) {
-          onStatus?.({ stage: 'waiting', message: `Queued on ${meta.name} (${model})…` });
+        // flowing. Extend the wait a little (a queued request is still alive),
+        // but never past hardSilenceMs so a request that will never produce
+        // tokens still fails instead of hanging forever.
+        if (!sawOutput) {
+          const waited = Date.now() - streamStartAt;
+          if (waited < hardSilenceMs) {
+            resetStall();
+            onStatus?.({ stage: 'waiting', message: `Queued on ${meta.name} (${model})… ${Math.round(waited / 1000)}s` });
+          }
         }
         return;
       }
@@ -655,14 +739,14 @@ async function streamOpenAICompatible(options) {
       if (!choice) return;
       if (choice.finish_reason) {
         finishReason = choice.finish_reason;
-        resetStall();
+        noteOutput('answer');
       }
       const delta = choice.delta || {};
       const reasoningPiece = typeof delta.reasoning_content === 'string'
         ? delta.reasoning_content
         : typeof delta.reasoning === 'string' ? delta.reasoning : '';
       if (reasoningPiece) {
-        resetStall();
+        noteOutput('reasoning');
         reasoningChars += reasoningPiece.length;
         if (reasoningText.length < 24_000) reasoningText += reasoningPiece.slice(0, 24_000 - reasoningText.length);
         const now = Date.now();
@@ -672,13 +756,13 @@ async function streamOpenAICompatible(options) {
         }
       }
       if (typeof delta.content === 'string' && delta.content) {
-        resetStall();
+        noteOutput('answer');
         if (waitNoticeTimer) { clearTimeout(waitNoticeTimer); waitNoticeTimer = null; }
         text += delta.content;
         onDelta(delta.content);
       }
       if (Array.isArray(delta.tool_calls)) {
-        resetStall();
+        noteOutput('answer');
         if (waitNoticeTimer) { clearTimeout(waitNoticeTimer); waitNoticeTimer = null; }
         for (const part of delta.tool_calls) {
           const index = part.index || 0;
@@ -707,9 +791,20 @@ async function streamOpenAICompatible(options) {
       if (buffer.trim()) handleLine(buffer);
     } catch (error) {
       if (timedOut) {
-        const err = new Error(`${meta.name} (${model}) stalled for ${Math.round(timeoutMs / 1000)}s without sending output. Try switching models.`);
+        const waited = Math.round((Date.now() - streamStartAt) / 1000);
+        const exhausted = Date.now() - streamStartAt >= totalMs;
+        const err = new Error(exhausted
+          ? `${meta.name} (${model}) stalled: gave up after ${waited}s without a finished answer.`
+          : sawAnswer
+            ? `${meta.name} (${model}) stalled: the answer went silent for ${Math.round(idleMs / 1000)}s.`
+            : reasoningChars > 0
+              ? `${meta.name} (${model}) stalled: ${reasoningChars} chars of reasoning, then ${waited}s with no answer.`
+              : `${meta.name} (${model}) stalled: no output after ${waited}s.`);
         err.status = 408;
-        err.noRetry = true;
+        // `stall` tells the engine this is a model/host problem it can route
+        // around — never a dead end and never a reason to cool the key down.
+        err.stall = true;
+        err.elapsedMs = Date.now() - streamStartAt;
         throw err;
       }
       if (signal?.aborted) throw new Error('Cancelled.');
@@ -751,6 +846,7 @@ async function streamOpenAICompatible(options) {
   } finally {
     if (stallTimer) clearTimeout(stallTimer);
     if (waitNoticeTimer) clearTimeout(waitNoticeTimer);
+    if (progressTimer) clearInterval(progressTimer);
     if (signal) signal.removeEventListener('abort', onCallerAbort);
   }
 }
@@ -1092,5 +1188,5 @@ function reviewerModel(providerId) {
 module.exports = {
   PROVIDERS, MODEL_NOTES, MODEL_FAILOVER, PROVIDER_SPILLOVER, PROVIDER_HIGH_HEADROOM, MODELS_ENDPOINTS,
   MODEL_ROUTING, auxiliaryModel, REVIEW_MODEL, reviewerModel, normalizeModelForProvider,
-  providerList, streamOpenAICompatible, testKey, fetchProviderModels, readError,
+  providerList, streamOpenAICompatible, resolveTimeouts, testKey, fetchProviderModels, readError,
 };

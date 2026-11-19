@@ -1,5 +1,19 @@
 # CAELIX changelog
 
+## 0.1.45 — A silent model can no longer end a turn
+
+- **Root cause, measured (`src/engine/providers.js`):** Kilo's `nvidia/nemotron-3-ultra-550b-a55b:free` streams ~10 reasoning deltas, then goes **completely silent for 72.6s** while it composes a 31,906-character `write_file` tool call, then emits the call at 74.8s. CAELIX used one `35s` watchdog for both "no first byte yet" and "stream went quiet mid-answer", so it aborted a perfectly healthy generation — and flagged the abort `noRetry`, which ended the turn with *"stalled for 35s without sending output. Try switching models."*
+- **Three-phase stall watchdog (`src/engine/providers.js`):**
+  - `firstByteMs` (120s, Numes 150s) before anything arrives — covers cold starts, queues and models that compose a whole tool call before streaming.
+  - `reasoningMs` (120s) after reasoning-only output: the model is demonstrably working, so it gets room to finish composing.
+  - `idleMs` (45s) once answer text or tool-call deltas have started — silence there is a real fault.
+  - SSE keepalives now extend a queued request, but only up to `firstByteMs + min(firstByteMs, 60s)`; previously a keepalive-per-200ms connection could hold on for **181s** (measured), now **3.4s** at a 1.2s first-byte budget.
+  - A 20-minute absolute ceiling per request stops a model that dribbles one reasoning token at a time from resetting the gap timer forever.
+  - Setting `CAELIX_REQUEST_TIMEOUT_MS` or passing `timeoutMs` still pins every phase, so tests stay deterministic. New: `CAELIX_REASONING_TIMEOUT_MS`, `CAELIX_FIRST_BYTE_TIMEOUT_MS`, `CAELIX_MAX_REQUEST_MS`. `resolveTimeouts()` is exported for testing.
+- **Every provider now fails over on a stall (`src/engine/index.js`):** stall detection was hard-coded for NVIDIA, Coarena and Numes only, so Kilo, Groq, OpenRouter and Gemini had no recovery path at all. A generic `isStall` branch now routes to another sibling model first (same key, no extra configuration), then to another configured provider, and caps stall-driven switches at 3 so a whole-gateway outage cannot burn six budgets. A stall is treated as a model/host problem: the user's key is never cooled down for it.
+- **Honest progress instead of a frozen window:** while a request is silent for more than 12s, CAELIX streams `Still generating — 34s since the last token…` status updates, and the final error names what actually happened (`no output after 123s`, `171 chars of reasoning, then 123s with no answer`, or `gave up after 1200s`) instead of a canned 35s.
+- **New shipped guard `npm run test:stall` (`scripts/verify-stall-failover.js`, 7 checks, ~7s, no key or network):** pins the three budgets, proves a stalled model fails over to a sibling and still answers, proves the key is not cooled, proves reasoning-then-silence fails on the reasoning budget, proves keepalive-only connections stay bounded, and proves a dribbling model hits the absolute ceiling.
+
 ## 0.1.44 — Universal visual & graphics engine: Chromium `render_preview`, SVG/Canvas checks & multi-style design awareness
 
 - **New `render_preview` tool (26th built-in tool, `src/engine/preview.js`):**

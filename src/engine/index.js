@@ -1329,6 +1329,7 @@ class Engine {
     let sleepAttempt = 0;
     let rotationCount = 0;
     let switchCount = 0;
+    let stallSwitches = 0;
     let stripImagesForTurn = false;
     let triedVisionSwitch = false;
     const triedTargets = new Set();
@@ -1446,15 +1447,21 @@ class Engine {
             || (status === 402 && !/claude-/i.test(activeModelId))
             || /did not respond within|stalled|no numes endpoint|no provider is available|insufficient credits/i.test(error.message));
         const isCoarenaUnavailable = activeProviderId === 'coarena' && (status === 404 || status === 502 || status === 503 || status === 504 || isCoarenaStall);
+        // Every provider goes silent sometimes: a cold or queued model can sit
+        // past the watchdog while it builds a long tool call. That is a
+        // model-level problem for this turn, so route around it instead of
+        // ending the turn with an error the user cannot act on.
+        const isStall = Boolean(error.stall)
+          || (status === 408 && /stalled|did not respond within|no output/i.test(error.message));
         const retryable = isRateLimit || status === 408 || status >= 500 || isNetworkFailure;
         const fast = process.env.CAELIX_FAST_RETRY === '1';
 
         const shouldFailoverNetwork = isNetworkFailure && (switchCount > 0 || sleepAttempt >= 1);
-        if ((isKeyAuthOrQuota || isNvidiaStall || isCoarenaUnavailable || isNumesUnavailable || isEmptyCompletion || isTurnOrderOrSignature400 || shouldFailoverNetwork) && !emitted) {
+        if ((isKeyAuthOrQuota || isNvidiaStall || isCoarenaUnavailable || isNumesUnavailable || isStall || isEmptyCompletion || isTurnOrderOrSignature400 || shouldFailoverNetwork) && !emitted) {
           const coolMs = fast ? 120 : (isRateLimit ? (error.retryAfterMs || 60_000) : 300_000);
           const scope = isRateLimit && MODEL_FAILOVER[activeProviderId] ? 'model' : 'key';
           // A stall, empty completion, network drop, schema/turn-order quirk, or single unavailable endpoint is a model/host problem, not a key problem: never cool the key down for it.
-          const isModelOnlyIssue = isNvidiaStall || isCoarenaUnavailable || isNumesUnavailable || isEmptyCompletion || isTurnOrderOrSignature400 || isNetworkFailure || status === 404;
+          const isModelOnlyIssue = isNvidiaStall || isCoarenaUnavailable || isNumesUnavailable || isStall || isEmptyCompletion || isTurnOrderOrSignature400 || isNetworkFailure || status === 404;
           if (!isModelOnlyIssue) {
             this.markKeyCooldown(activeProviderId, picked.index, coolMs, activeModelId, scope);
           }
@@ -1492,8 +1499,17 @@ class Engine {
             for (const alt of (MODEL_FAILOVER.numes || []).slice().reverse()) {
               if (alt !== activeModelId) candidates.unshift({ provider: 'numes', model: alt, tier: 'sibling-model' });
             }
+          } else if (isStall) {
+            // Sibling models share the key already in hand, so a silent model
+            // can be routed around even when no other provider is configured
+            // and the key store exposes no catalog.
+            for (const alt of (MODEL_FAILOVER[activeProviderId] || [])) {
+              if (alt !== activeModelId) {
+                candidates.unshift({ provider: activeProviderId, model: alt, tier: 'sibling-model' });
+              }
+            }
           }
-          if (switchCount < 6) {
+          if (switchCount < 6 && stallSwitches < 3) {
             const nextCandidate = candidates.find((c) => {
               if (triedTargets.has(`${c.provider}:${c.model}`)) return false;
               if (c.provider === 'gemini' && (hasTurnUnsignedToolCalls || isTurnOrderOrSignature400)) return false;
@@ -1502,6 +1518,7 @@ class Engine {
             });
             if (nextCandidate) {
               switchCount += 1;
+              if (isStall) stallSwitches += 1;
               const prevLabel = `${provider.name} (${activeModelId})`;
               activeProviderId = nextCandidate.provider;
               activeModelId = nextCandidate.model;
@@ -1517,7 +1534,9 @@ class Engine {
                 model: nextCandidate.model,
                 message: isEmptyCompletion
                   ? `${prevLabel} returned an empty response — switched to ${PROVIDERS[nextCandidate.provider].name} (${nextCandidate.model}) so work continues…`
-                  : `${prevLabel} hit ${status || 'limit'} — switched to ${PROVIDERS[nextCandidate.provider].name} (${nextCandidate.model}) so work continues…`,
+                  : isStall
+                    ? `${prevLabel} went silent — switched to ${PROVIDERS[nextCandidate.provider].name} (${nextCandidate.model}) so work continues…`
+                    : `${prevLabel} hit ${status || 'limit'} — switched to ${PROVIDERS[nextCandidate.provider].name} (${nextCandidate.model}) so work continues…`,
               });
               continue;
             }
@@ -1535,7 +1554,14 @@ class Engine {
           && !this.listFailoverTargets(activeProviderId, activeModelId)
             .some((t) => t.provider !== activeProviderId);
         const maxAttempts = isRateLimit ? (quotaEscape ? 1 : 5) : 2;
-        if (!retryable || error.noRetry || emitted || sleepAttempt >= maxAttempts) {
+        // A stall already spent the whole pre-output budget. Once another model
+        // has been tried, retrying the silent one only doubles the wait; with
+        // no other model available, one retry is still better than giving up.
+        const stallExhausted = isStall && stallSwitches > 0;
+        if (!retryable || error.noRetry || emitted || stallExhausted || sleepAttempt >= maxAttempts) {
+          if (stallExhausted) {
+            error.message = `${error.message} CAELIX tried every eligible model for this turn — add a key for another provider in Keys, or try again in a moment.`;
+          }
           if (quotaEscape && isRateLimit && !error.noRetry) {
             error.noRetry = true;
             error.message = `${provider?.name || activeProviderId} free-tier quota is exhausted and no other provider key is saved. Add a key on another provider in Keys, or wait for the quota to reset.`;
