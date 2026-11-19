@@ -134,6 +134,36 @@ const PROVIDERS = {
     anonymous: true,
     color: '#22d3ee',
   },
+  opencode: {
+    id: 'opencode',
+    name: 'OpenCode Zen',
+    keyLabel: 'OpenCode Zen API key (optional — free tier also works without one)',
+    consoleUrl: 'https://opencode.ai/auth',
+    baseUrl: 'https://opencode.ai/zen/v1/chat/completions',
+    // Verified live from https://opencode.ai/zen/v1/models on 2026-11-19:
+    // $0 tool-capable coding models first, plus Claude rows for keyholders.
+    models: [
+      'mimo-v2.6-flash-free',
+      'deepseek-v4.1-flash-free',
+      'nemotron-3.5-super-vl-free',
+      'nemotron-3.5-lightning-free',
+      'big-pickle',
+      'longcat-2.5-free',
+      'beam-free',
+      'hy4-flash-free',
+      'tidepool-alpha-free',
+      'iceman-free',
+      'flint-40b-free',
+      'inkling-2-small-free',
+      'claude-sonnet-5-5',
+      'claude-opus-5-5',
+      'claude-haiku-5-5',
+      'claude-fable-5-2',
+    ],
+    defaultModel: 'mimo-v2.6-flash-free',
+    anonymous: true,
+    color: '#f97316',
+  },
   numes: {
     id: 'numes',
     name: 'Numes',
@@ -270,6 +300,18 @@ const MODEL_NOTES = {
   'dealignai/glm-5.3-uncensored-fp8:free': 'Numes · $0/token · Uncensored GLM (auto-fails over when offline)',
   'uniboshi/kimi-k3-abliterated-v1:free': 'Numes · $0/token · 1M uncensored Kimi K3 (auto-fails over when offline)',
   'anthropic/claude-fable-5.2': 'Claude · Paid credits · Fable 5.2',
+  'mimo-v2.6-flash-free': 'OpenCode Zen · $0 free · 200k · Vision & tools',
+  'deepseek-v4.1-flash-free': 'OpenCode Zen · $0 free · 200k · Reasoning & tools',
+  'nemotron-3.5-super-vl-free': 'OpenCode Zen · $0 free · 1M · Vision & tools',
+  'nemotron-3.5-lightning-free': 'OpenCode Zen · $0 free · 262k · Fast tools',
+  'big-pickle': 'OpenCode Zen · $0 free · 200k · Reasoning & tools',
+  'longcat-2.5-free': 'OpenCode Zen · $0 free · 1M · Tools',
+  'beam-free': 'OpenCode Zen · $0 free · 1M · Tools',
+  'hy4-flash-free': 'OpenCode Zen · $0 free · 1M · Tools',
+  'tidepool-alpha-free': 'OpenCode Zen · $0 free · 1M · Tools',
+  'iceman-free': 'OpenCode Zen · $0 free · 262k · Tools',
+  'flint-40b-free': 'OpenCode Zen · $0 free · 262k · Tools',
+  'inkling-2-small-free': 'OpenCode Zen · $0 free · 1M · Tools',
 };
 
 const NUMES_LEGACY_FREE_ALIASES = {
@@ -300,13 +342,14 @@ const MODEL_FAILOVER = {
   openrouter: ['openrouter/free', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'nvidia/nemotron-3.5-super-vl:free', 'nvidia/nemotron-3.5-lightning:free', 'baidu/ernie-5.5-flash-preview:free'],
   coarena: ['gpt-6-luna', 'gemini-3-8-flash', 'deepseek-v4-1-flash-1017'],
   kilo: ['nvidia/nemotron-3.5-super-vl:free', 'nvidia/nemotron-3.5-lightning:free', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'baidu/ernie-5.5-flash-preview:free', 'kilo-auto/free'],
+  opencode: ['mimo-v2.6-flash-free', 'deepseek-v4.1-flash-free', 'nemotron-3.5-super-vl-free', 'nemotron-3.5-lightning-free', 'big-pickle', 'longcat-2.5-free'],
   numes: ['deepseek/deepseek-v4.1-flash:free', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'z-ai/glm-5.3-flash:free', 'moonshotai/kimi-k3.1-pro:free'],
 };
 
 // Order when spilling over across different providers that have saved keys.
-// Kilo sits last: it is always available (anonymous), so it must never shadow
-// a provider the user actually saved a key for.
-const PROVIDER_SPILLOVER = ['gemini', 'coarena', 'nvidia', 'groq', 'openrouter', 'numes', 'kilo'];
+// Kilo & OpenCode Zen sit last: anonymous free tiers must never shadow a provider
+// the user actually saved a key for.
+const PROVIDER_SPILLOVER = ['gemini', 'coarena', 'nvidia', 'groq', 'openrouter', 'numes', 'kilo', 'opencode'];
 const PROVIDER_HIGH_HEADROOM = {
   gemini: 'gemini-3.5-flash-lite',
   coarena: 'gpt-6-luna',
@@ -315,6 +358,7 @@ const PROVIDER_HIGH_HEADROOM = {
   numes: 'deepseek/deepseek-v4.1-flash:free',
   groq: 'qwen/qwen3.8-27b',
   kilo: 'nvidia/nemotron-3.5-lightning:free',
+  opencode: 'nemotron-3.5-lightning-free',
 };
 
 function providerList(selfcheck) {
@@ -477,6 +521,17 @@ function friendlyDetail(provider, status, detail) {
     }
     if (status === 502 || status === 503) {
       return `${text ? `${text} — ` : ''}No Numes endpoint could serve this model right now. Pick another tool-capable :free model in the list, or Refresh the catalog to see what the key can serve.`;
+    }
+  }
+  if (provider === 'opencode') {
+    if (status === 401) {
+      return 'OpenCode Zen rejected the API key. Copy or create a key at https://opencode.ai/auth and save it here in Keys.';
+    }
+    if (status === 402) {
+      return `${text ? `${text} — ` : ''}This Claude or paid OpenCode Zen model requires credits. Switch to a free *-free model or top up at https://opencode.ai/auth.`;
+    }
+    if (status === 429) {
+      return `${text ? `${text} — ` : ''}OpenCode Zen free usage limit reached. Save an OpenCode Zen key from https://opencode.ai/auth in Keys, or switch to another provider.`;
     }
   }
   return text;
@@ -961,17 +1016,25 @@ const COARENA_TEST_FALLBACKS = [
   'deepseek-v4-1-flash-1017',
 ];
 
+const OPENCODE_TEST_FALLBACKS = [
+  'mimo-v2.6-flash-free',
+  'deepseek-v4.1-flash-free',
+  'nemotron-3.5-lightning-free',
+  'big-pickle',
+];
+
 async function probeModel(meta, provider, apiKey, targetModel) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
   try {
+    const headers = {
+      'content-type': 'application/json',
+      ...(provider === 'openrouter' ? { 'HTTP-Referer': 'https://caelix.local', 'X-Title': 'CAELIX' } : {}),
+    };
+    if (apiKey && apiKey !== 'anonymous') headers.authorization = `Bearer ${apiKey}`;
     const response = await fetch(meta.baseUrl, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${apiKey}`,
-        ...(provider === 'openrouter' ? { 'HTTP-Referer': 'https://caelix.local', 'X-Title': 'CAELIX' } : {}),
-      },
+      headers,
       body: JSON.stringify({
         model: targetModel,
         messages: [{ role: 'user', content: 'Reply with the single word ready.' }],
@@ -1075,7 +1138,9 @@ async function testKey(provider, apiKey, model = null) {
         ? [...new Set([targetModel, ...OPENROUTER_TEST_FALLBACKS])]
         : provider === 'coarena'
           ? [...new Set([targetModel, ...COARENA_TEST_FALLBACKS])]
-          : [targetModel];
+          : provider === 'opencode'
+            ? [...new Set([targetModel, ...OPENCODE_TEST_FALLBACKS])]
+            : [targetModel];
   let lastError = null;
   for (const candidate of candidates) {
     try {
@@ -1104,6 +1169,7 @@ const MODELS_ENDPOINTS = {
   groq: 'https://api.groq.com/openai/v1/models',
   coarena: 'https://coarena.ai/api/v1/models',
   kilo: 'https://ai-gateway.kilo.ai/api/v1/models',
+  opencode: 'https://opencode.ai/zen/v1/models',
   omniroute: 'http://localhost:20128/v1/models',
   // Tool-capable text models, cheapest first — free $0 rows sort to the top.
   numes: 'https://api.numes.ai/api/v1/models?output_modalities=text&supported_parameters=tools&sort=pricing-low-to-high',
@@ -1146,6 +1212,17 @@ function filterLiveProviderRow(provider, item) {
     const isFree = Boolean(item?.isFree) || id.endsWith(':free') || id === 'kilo-auto/free' || id === 'openrouter/free';
     if (!isFree) return false;
     if (Array.isArray(item?.supported_parameters) && !item.supported_parameters.includes('tools')) return false;
+    return true;
+  }
+  if (provider === 'opencode') {
+    if (isClaudeId(id)) return true;
+    const inPrice = Number(item?.cost?.text?.input?.price ?? item?.pricing?.prompt);
+    const outPrice = Number(item?.cost?.text?.output?.price ?? item?.pricing?.completion ?? 0);
+    const isFree = (Number.isFinite(inPrice) && inPrice === 0 && (!Number.isFinite(outPrice) || outPrice === 0))
+      || id.endsWith('-free') || id === 'big-pickle';
+    if (!isFree) return false;
+    if (item?.capabilities?.tools?.supported === false) return false;
+    if (item?.recommended_api && item.recommended_api !== 'chat-completions') return false;
     return true;
   }
   if (provider === 'numes') {
@@ -1214,6 +1291,11 @@ async function fetchProviderModels(provider, apiKey) {
       const unstableRest = ids.filter((id) => !curatedLive.includes(id) && /^(dealignai|uniboshi)\//i.test(id));
       return [...new Set([...curatedLive, ...rest, ...unstableRest])].slice(0, 400);
     }
+    if (provider === 'opencode') {
+      const freeFirst = ids.filter((id) => !isClaudeId(id));
+      const claudeRest = ids.filter((id) => isClaudeId(id));
+      return [...new Set([...meta.models.filter((id) => ids.includes(id)), ...freeFirst, ...claudeRest])].slice(0, 400);
+    }
     return [...new Set([...meta.models, ...ids])].slice(0, 400);
   } finally {
     clearTimeout(timer);
@@ -1231,6 +1313,7 @@ const MODEL_ROUTING = {
   openrouter: 'openrouter/free',
   coarena: 'gemini-3-8-flash',
   kilo: 'nvidia/nemotron-3.5-lightning:free',
+  opencode: 'nemotron-3.5-lightning-free',
   numes: 'deepseek/deepseek-v4.1-flash:free',
 };
 
@@ -1254,6 +1337,7 @@ const REVIEW_MODEL = {
   numes: 'nvidia/nemotron-3-ultra-550b-a55b:free',
   coarena: 'gpt-6-luna',
   kilo: 'nvidia/nemotron-3-ultra-550b-a55b:free',
+  opencode: 'nemotron-3.5-super-vl-free',
 };
 
 function reviewerModel(providerId) {

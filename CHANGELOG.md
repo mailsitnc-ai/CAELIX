@@ -1,5 +1,15 @@
 # CAELIX changelog
 
+## 0.1.47 — Confirmation follow-through (`"do so"` / `"yes"`) & OpenCode Zen integration
+
+- **Fixed short-confirmation amnesia (`"do so"`, `"yes"`, `"go ahead"`, `"proceed"`) (`src/engine/index.js`):**
+  - Previously, when CAELIX asked *"Would you like me to do this?"* and the user replied `"do so"`, `systemPrompt()` overwrote the task anchor with `Current task anchor (stay on it until complete): do so`, causing smaller models to respond `"I do not know what to do"`.
+  - Added `resolveTaskAnchor()` (fed both persisted history and unsaved incoming messages via `buildConversation`), so confirmations across both **Code** and **Chat** resolve back to the prior substantive user request plus CAELIX's own proposed action, and updated `systemPrompt()` so confirmation replies trigger immediate tool execution instead of asking again.
+- **OpenCode Zen (`opencode`) provider — same integration as Kilo (`src/engine/providers.js`, `src/engine/index.js`, `src/cli.js`, `src/main.js`):**
+  - Added `PROVIDERS.opencode` (`https://opencode.ai/zen/v1/chat/completions`, catalog `https://opencode.ai/zen/v1/models`, `anonymous: true` with optional OpenCode Zen API key from `https://opencode.ai/auth`), curating the 12 live `$0` tool-capable free coding models (`mimo-v2.6-flash-free`, `deepseek-v4.1-flash-free`, `nemotron-3.5-super-vl-free`, `nemotron-3.5-lightning-free`, `big-pickle`, `longcat-2.5-free`, `beam-free`, `hy4-flash-free`, `tidepool-alpha-free`, `iceman-free`, `flint-40b-free`, `inkling-2-small-free`) plus optional Claude models.
+  - Wired OpenCode Zen across catalog refresh filtering (`cost.text.input.price === 0` + `capabilities.tools.supported`), `MODEL_ROUTING`, `REVIEW_MODEL`, `MODEL_FAILOVER`, `PROVIDER_SPILLOVER`, `VISION_CANDIDATES`, `FreeUsageLimitError` quota failover, Team Mode pickers, Keys modal, and headless CLI anonymous spillover lanes.
+- **Verification:** `checks/verify_features.js` now passes **52/52 checks** (new: #51 OpenCode Zen, #52 confirmation anchoring), `npm run test:stall` **7/7**, `npm run test:reliability` **10/10**, and `npm run selfcheck` passes with OpenCode Zen verified in Keys & Team Mode pickers.
+
 ## 0.1.46 — Universal model reliability: health memory, fast dead-host detection, parallel reads & zero-gap continuation
 
 - **Persistent model reliability memory (`src/engine/model-health.js`, `src/engine/index.js`, `src/main.js`, `src/cli.js`):**

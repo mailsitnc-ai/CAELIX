@@ -587,7 +587,8 @@ function registerIpc() {
   });
 
   ipcMain.handle('keys:test', async (_event, { provider, key, model }) => {
-    const pool = key ? [String(key).trim()] : keys.list(provider);
+    const rawPool = key ? [String(key).trim()] : keys.list(provider);
+    const pool = rawPool.length ? rawPool : (PROVIDERS[provider]?.anonymous ? ['anonymous'] : []);
     if (!pool.length) throw new Error('Paste a key first.');
     // OmniRoute needs its helper alive before a gateway key means anything;
     // this is the one place CAELIX launches it outside of a chat send.

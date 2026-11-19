@@ -25,6 +25,7 @@ const KEY_ENV = {
   groq: ['GROQ_API_KEY'],
   coarena: ['COARENA_API_KEY'],
   numes: ['NUMES_API_KEY'],
+  opencode: ['OPENCODE_API_KEY', 'OPENCODE_ZEN_API_KEY'],
 };
 
 function check(name, ok, detail) {
@@ -195,9 +196,11 @@ async function run(args) {
       ...Object.entries(KEY_ENV)
         .filter(([provider]) => envKey(provider))
         .map(([provider]) => ({ provider, configured: true, count: 1, masked: `${'•'.repeat(8)}${envKey(provider).slice(-4)}` })),
-      // Kilo's free tier works anonymously, so it is always a live fallback
-      // lane for spillover — even headless with zero env keys.
-      { provider: 'kilo', configured: true, count: 1, masked: 'anonymous (no key needed)' },
+      // Anonymous gateways (Kilo, OpenCode Zen) serve free tiers with no key,
+      // so they are always live spillover lanes even with zero env keys.
+      ...Object.values(PROVIDERS)
+        .filter((p) => p.anonymous && !envKey(p.id))
+        .map((p) => ({ provider: p.id, configured: true, count: 1, masked: 'anonymous (no key needed)' })),
     ],
   };
   const { Engine } = require('./engine');

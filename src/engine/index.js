@@ -180,6 +180,56 @@ function sanitizeToolHistory(list) {
   return out;
 }
 
+const CONFIRMATION_RE = /^(?:yes|yeah|yep|yup|ok|okay|sure|do so|do it|please do|go ahead|proceed|continue|sounds good|let'?s do (?:it|that)|build it|fix it|make it|do that|y|alright|fine)\b[.!?\s]*$/i;
+
+function isShortConfirmation(text) {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  return clean.length > 0 && clean.length <= 48 && CONFIRMATION_RE.test(clean);
+}
+
+// Build a self-contained task anchor so short follow-ups ("do so", "yes",
+// "go ahead") or attachment-only turns never lose the prior request or the
+// action CAELIX itself just offered to perform.
+function resolveTaskAnchor(messages = [], isChat = false) {
+  const visible = (Array.isArray(messages) ? messages : [])
+    .filter((m) => m && !m.hidden && !m.isBtw && (m.role === 'user' || m.role === 'assistant'));
+  if (!visible.length) return '';
+  let latestUserIdx = -1;
+  for (let i = visible.length - 1; i >= 0; i -= 1) {
+    if (visible[i].role === 'user') { latestUserIdx = i; break; }
+  }
+  if (latestUserIdx < 0) return '';
+  const latestUser = visible[latestUserIdx];
+  const latestText = String(latestUser.content || '').replace(/\s+/g, ' ').trim();
+  if (isShortConfirmation(latestText)) {
+    const prevAssistant = visible.slice(0, latestUserIdx).reverse().find((m) => m.role === 'assistant' && String(m.content || '').trim());
+    const priorUser = visible.slice(0, latestUserIdx).reverse().find((m) => (
+      m.role === 'user'
+      && ((String(m.content || '').trim() && !isShortConfirmation(m.content)) || (Array.isArray(m.attachments) && m.attachments.length))
+    ));
+    const parts = [];
+    if (priorUser) {
+      const priorDesc = String(priorUser.content || '').replace(/\s+/g, ' ').trim()
+        || `[Attached: ${(priorUser.attachments || []).map((a) => a.name || 'file').join(', ')}]`;
+      parts.push(`Prior request: ${priorDesc.slice(0, 500)}`);
+    }
+    if (prevAssistant) {
+      parts.push(`Agreed next action: ${String(prevAssistant.content || '').replace(/\s+/g, ' ').trim().slice(0, 700)}`);
+    }
+    if (parts.length) {
+      return `\n\nCurrent task anchor (user confirmed "${latestText}" — execute the agreed work immediately using tools; never ask again or say you do not know what to do): ${parts.join(' | ')}`;
+    }
+  }
+  if (isChat) return '';
+  if (!latestText && Array.isArray(latestUser.attachments) && latestUser.attachments.length) {
+    const names = latestUser.attachments.map((a) => a.name || 'file').join(', ');
+    return `\n\nCurrent task anchor (stay on it until complete): Inspect attached ${names} and assist the user.`;
+  }
+  return latestText
+    ? `\n\nCurrent task anchor (stay on it until complete): ${latestText.slice(0, 1200)}`
+    : '';
+}
+
 function buildTurnSummary({ status, elapsedMs, stepsLog = [], changes = [], error = null }) {
   const completed = stepsLog.filter((s) => s.ok);
   const failed = stepsLog.filter((s) => !s.ok);
@@ -555,7 +605,7 @@ class Engine {
     return text;
   }
 
-  systemPrompt(session) {
+  systemPrompt(session, extraMessages = []) {
     const memory = this.loadMemory(session.cwd);
     const blocks = memory.map((entry) => `\n\nProject instructions from ${entry.file}:\n${entry.text}`);
     const mcpNames = this.mcp ? [...this.mcp.toolMap.keys()] : [];
@@ -585,20 +635,20 @@ class Engine {
     // re-sent every round — the model sees the repo's shape without grepping.
     const outline = isChat ? '' : this.outlineFor(session.cwd);
     // Task anchor (ceiling helper): keep the current user task riding along so
-    // a 20+ step multi-file refactor never drifts from what "done" means.
-    const latestUser = !isChat && Array.isArray(session.messages)
-      ? [...session.messages].reverse().find((m) => m?.role === 'user' && !m.hidden && !m.isBtw)
-      : null;
-    const anchorText = latestUser ? String(latestUser.content || '').replace(/\s+/g, ' ').trim().slice(0, 1200) : '';
-    const anchor = anchorText
-      ? `\n\nCurrent task anchor (stay on it until complete): ${anchorText}`
-      : '';
+    // a 20+ step multi-file refactor never drifts from what "done" means, and
+    // resolve short confirmations ("do so", "yes", "go ahead") to the prior
+    // agreed action instead of anchoring on the literal word "do so".
+    const combinedMessages = Array.isArray(extraMessages) && extraMessages.length
+      ? [...(Array.isArray(session.messages) ? session.messages : []), ...extraMessages]
+      : session.messages;
+    const anchor = resolveTaskAnchor(combinedMessages, isChat);
     return [
       isChat
         ? 'You are CAELIX in Chat mode, a clean general assistant workspace separate from code project folders.'
         : 'You are CAELIX, a local coding agent. You work only inside the selected project folder.',
       MODE_RULES[session.mode] || MODE_RULES.ask,
       'Use a tool whenever you need to inspect or change something. When asked to open or interact with a web page, operate the built-in browser using browser_navigate, browser_read, browser_click, and browser_type. Keep replies concise and concrete.',
+      'Never reply that you have not been instructed or do not know what to do before checking the prior conversation messages, assistant proposals, attachments, and workspace files. When the user confirms a proposed action (such as "do so", "yes", "ok", "go ahead", or "proceed"), immediately execute that work using tools instead of asking again.',
       'Context discipline: use glob and grep to locate exact files and line numbers before calling read_file, pass tight offset/limit slices on large files instead of reading whole files, and avoid re-reading ranges you already inspected.',
       // Visual work fails silently unless it is stated and then measured. The
       // brief is a requirement; design_check turns it into something checkable.
@@ -708,7 +758,7 @@ class Engine {
     let slice = merged.slice(-60);
     while (slice.length && slice[0].role !== 'user') slice.shift();
     let history = sanitizeToolHistory(this.trimHistoryForContext(slice, session));
-    const system = { role: 'system', content: this.systemPrompt(session) };
+    const system = { role: 'system', content: this.systemPrompt(session, incoming) };
     let total = estimateTokens(system.content);
     for (const message of history) total += estimateTokens(message.content || '');
     let dropped = 0;
@@ -1597,6 +1647,7 @@ class Engine {
               ? [
                 { provider: 'nvidia', model: 'nvidia/nemotron-3.5-super-vl-120b-a12b' },
                 { provider: 'openrouter', model: 'nvidia/nemotron-3.5-super-vl:free' },
+                { provider: 'opencode', model: 'mimo-v2.6-flash-free' },
                 { provider: 'numes', model: 'moonshotai/kimi-k3.1-pro:free' },
                 { provider: 'coarena', model: 'gpt-6-luna' },
                 { provider: 'gemini', model: 'gemini-3-flash-preview' },
@@ -1605,6 +1656,7 @@ class Engine {
                 { provider: 'gemini', model: 'gemini-3-flash-preview' },
                 { provider: 'nvidia', model: 'nvidia/nemotron-3.5-super-vl-120b-a12b' },
                 { provider: 'openrouter', model: 'nvidia/nemotron-3.5-super-vl:free' },
+                { provider: 'opencode', model: 'mimo-v2.6-flash-free' },
                 { provider: 'numes', model: 'moonshotai/kimi-k3.1-pro:free' },
                 { provider: 'coarena', model: 'gpt-6-luna' },
               ];
@@ -1799,7 +1851,7 @@ class Engine {
         // cross-provider escape, further retries only burn wall-clock time, so
         // fail fast with a clear error instead of retrying the same dead key
         // five times. Transient rate limits (plain "rate limit") still retry.
-        const hardQuota429 = isRateLimit && /exceeded your current quota|insufficient_quota|billing details/i.test(error.message);
+        const hardQuota429 = isRateLimit && /exceeded your current quota|insufficient_quota|billing details|FreeUsageLimitError|free usage limit reached/i.test(error.message);
         const quotaEscape = hardQuota429
           && pool.length <= 1
           && !this.listFailoverTargets(activeProviderId, activeModelId)

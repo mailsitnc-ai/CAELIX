@@ -645,10 +645,13 @@ button:hover{transform:translateY(-1px)} button:focus-visible{outline:2px solid 
       if (openrouterModels < 15) throw new Error(`Expected >= 15 OpenRouter (free + Claude) models, got ${openrouterModels}`);
       const numesModels = await evaluate('window.__caelixState.providers.find(p => p.id === "numes")?.models?.length || 0');
       if (numesModels < 9) throw new Error(`Expected >= 9 Numes (free + Claude) models, got ${numesModels}`);
+      const opencodeModels = await evaluate('window.__caelixState.providers.find(p => p.id === "opencode")?.models?.length || 0');
+      if (opencodeModels < 12) throw new Error(`Expected >= 12 OpenCode Zen models, got ${opencodeModels}`);
       await click('#keys-btn');
       await waitFor('!!document.querySelector("#key-input-groq")', 3000, 'groq key input in Keys modal');
       await waitFor('!!document.querySelector("#key-input-coarena")', 3000, 'coarena key input in Keys modal');
       await waitFor('!!document.querySelector("#key-input-numes")', 3000, 'numes key input in Keys modal');
+      await waitFor('!!document.querySelector("#key-input-opencode")', 3000, 'opencode key input in Keys modal');
       await click('#keys-close');
       await click('#team-chip');
       await waitFor('!document.querySelector("#team-menu")?.hidden', 3000, 'team menu popover open');
@@ -658,6 +661,8 @@ button:hover{transform:translateY(-1px)} button:focus-visible{outline:2px solid 
       if (teamOpt2Count < 2) throw new Error(`Expected >= 2 Team model-2 options, got ${teamOpt2Count}`);
       const kiloInTeam = await evaluate('[...document.querySelectorAll("#team-model-1 option, #team-model-2 option")].some((option) => option.value.startsWith("kilo::"))');
       if (!kiloInTeam) throw new Error('Kilo is missing from the Team Mode model pickers.');
+      const opencodeInTeam = await evaluate('[...document.querySelectorAll("#team-model-1 option, #team-model-2 option")].some((option) => option.value.startsWith("opencode::"))');
+      if (!opencodeInTeam) throw new Error('OpenCode Zen is missing from the Team Mode model pickers.');
       const anonymousInTeam = await evaluate('window.__caelixState.providers.some((provider) => provider.anonymous)');
       if (!anonymousInTeam) throw new Error('No anonymous provider reached the renderer, so Team Mode cannot list Kilo.');
       await click('#team-save-btn');
