@@ -295,7 +295,7 @@ function normalizeModelForProvider(providerId, modelId) {
 // Providers whose models carry separate RPM/TPM/RPD quota buckets.
 const MODEL_FAILOVER = {
   gemini: ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-flash-lite-latest', 'gemini-3-flash-preview', 'gemini-4-hydrogen'],
-  nvidia: ['nvidia/nemotron-3.5-super-vl-120b-a12b', 'nvidia/nemotron-3-ultra-550b-a55b', 'poolside/laguna-xs-2.1', 'nvidia/nemotron-3.5-lightning-30b-a3b'],
+  nvidia: ['nvidia/nemotron-3.5-lightning-30b-a3b', 'nvidia/nemotron-3.5-super-vl-120b-a12b', 'nvidia/nemotron-3.5-bolt-e4b', 'nvidia/nemotron-3-ultra-550b-a55b', 'poolside/laguna-xs-2.1'],
   groq: ['openai/gpt-oss-20b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-120b'],
   openrouter: ['openrouter/free', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'nvidia/nemotron-3.5-super-vl:free', 'nvidia/nemotron-3.5-lightning:free', 'baidu/ernie-5.5-flash-preview:free'],
   coarena: ['gpt-6-luna', 'gemini-3-8-flash', 'deepseek-v4-1-flash-1017'],
@@ -306,10 +306,11 @@ const MODEL_FAILOVER = {
 // Order when spilling over across different providers that have saved keys.
 // Kilo sits last: it is always available (anonymous), so it must never shadow
 // a provider the user actually saved a key for.
-const PROVIDER_SPILLOVER = ['gemini', 'nvidia', 'openrouter', 'numes', 'groq', 'kilo'];
+const PROVIDER_SPILLOVER = ['gemini', 'coarena', 'nvidia', 'groq', 'openrouter', 'numes', 'kilo'];
 const PROVIDER_HIGH_HEADROOM = {
   gemini: 'gemini-3.5-flash-lite',
-  nvidia: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
+  coarena: 'gpt-6-luna',
+  nvidia: 'nvidia/nemotron-3.5-lightning-30b-a3b',
   openrouter: 'openrouter/free',
   numes: 'deepseek/deepseek-v4.1-flash:free',
   groq: 'qwen/qwen3.8-27b',
@@ -551,6 +552,10 @@ function resolveTimeouts(provider, options = {}) {
     || (pinned ? idleMs : (slow ? 150_000 : 120_000));
   const firstByteMs = Number(process.env.CAELIX_FIRST_BYTE_TIMEOUT_MS)
     || (pinned ? idleMs : (slow ? 150_000 : 120_000));
+  // HTTP response headers must arrive much sooner than slow pre-first-token
+  // generation: an unreachable host fails in ~30s instead of burning 120s.
+  const headersMs = Number(process.env.CAELIX_HEADERS_TIMEOUT_MS)
+    || (pinned ? firstByteMs : Math.min(firstByteMs, slow ? 45_000 : 30_000));
   // A keepalive proves the socket is alive but not that work is happening, so
   // it may extend the wait — bounded, never indefinitely.
   const hardSilenceMs = firstByteMs + Math.min(firstByteMs, 60_000);
@@ -559,7 +564,7 @@ function resolveTimeouts(provider, options = {}) {
   // alone cannot bound the wait.
   const totalMs = Number(process.env.CAELIX_MAX_REQUEST_MS)
     || (pinned ? Math.max(idleMs * 20, 10_000) : 20 * 60_000);
-  return { idleMs, reasoningMs, firstByteMs, hardSilenceMs, totalMs, pinned };
+  return { headersMs, idleMs, reasoningMs, firstByteMs, hardSilenceMs, totalMs, pinned };
 }
 
 async function streamOpenAICompatible(options) {
@@ -578,7 +583,7 @@ async function streamOpenAICompatible(options) {
   // silence after answer tokens have started is a real fault. Setting
   // CAELIX_REQUEST_TIMEOUT_MS (or an explicit timeoutMs) pins every phase,
   // which keeps tests deterministic.
-  const { idleMs, reasoningMs, firstByteMs, hardSilenceMs, totalMs } = resolveTimeouts(provider, { timeoutMs });
+  const { headersMs, idleMs, reasoningMs, firstByteMs, hardSilenceMs, totalMs, pinned } = resolveTimeouts(provider, { timeoutMs });
 
   const headers = {
     'content-type': 'application/json',
@@ -615,8 +620,43 @@ async function streamOpenAICompatible(options) {
   let sawOutput = false;
   let sawAnswer = false;
   let lastOutputAt = Date.now();
-  let stallBudget = firstByteMs;
+  let firstOutputAt = 0;
+  let stallBudget = headersMs;
   let stallTimer = null;
+  let firedBudgetMs = 0;
+  let hasToolDeltas = false;
+  let hasToolsPending = Boolean(tools && tools.length);
+  let streamedAnswerText = '';
+  // A model that has already proved it streams quickly is judged against its
+  // own pace. Without this, a 45s gap is tolerated even on a model delivering
+  // a token every 40ms, which is how a dead stream costs most of a minute
+  // before anything happens.
+  const answerGaps = [];
+  let answerChars = 0;
+  let lastAnswerAt = 0;
+  const FAST_STREAM_GAP_MS = 800;
+  const FAST_STREAM_IDLE_MS = Number(process.env.CAELIX_FAST_IDLE_MS) > 0
+    ? Number(process.env.CAELIX_FAST_IDLE_MS)
+    : 15_000;
+  const fastIdleMs = () => Math.min(idleMs, FAST_STREAM_IDLE_MS);
+  const noteAnswerPace = () => {
+    const now = Date.now();
+    if (lastAnswerAt) {
+      const gap = now - lastAnswerAt;
+      if (gap > 0 && gap < 30_000) {
+        answerGaps.push(gap);
+        if (answerGaps.length > 40) answerGaps.shift();
+      }
+    }
+    lastAnswerAt = now;
+    return answerGaps;
+  };
+  const fastStreamEstablished = () => {
+    if (pinned) return false;
+    if (answerChars < 600 || answerGaps.length < 12) return false;
+    const sorted = [...answerGaps].sort((a, b) => a - b);
+    return sorted[Math.floor(sorted.length / 2)] <= FAST_STREAM_GAP_MS;
+  };
   const resetStall = () => {
     if (stallTimer) clearTimeout(stallTimer);
     const remaining = deadlineAt - Date.now();
@@ -627,6 +667,7 @@ async function streamOpenAICompatible(options) {
     }
     stallTimer = setTimeout(() => {
       timedOut = true;
+      firedBudgetMs = stallBudget;
       requestAbort.abort();
     }, Math.min(stallBudget, remaining));
   };
@@ -635,9 +676,33 @@ async function streamOpenAICompatible(options) {
   // any further silence is a fault.
   const noteOutput = (phase) => {
     sawOutput = true;
-    if (phase === 'answer') sawAnswer = true;
+    if (!firstOutputAt) firstOutputAt = Date.now();
+    if (phase === 'answer') {
+      sawAnswer = true;
+      noteAnswerPace();
+    }
     lastOutputAt = Date.now();
-    stallBudget = phase === 'reasoning' ? reasoningMs : idleMs;
+    if (phase === 'reasoning') {
+      stallBudget = reasoningMs;
+    } else if (phase === 'tool') {
+      hasToolDeltas = true;
+      stallBudget = idleMs;
+    } else {
+      // If tools are attached and no tool_call has arrived yet while intro prose
+      // finishes cleanly ("Let me build... I'll: 1. ..."), models frequently
+      // pause to buffer a large write_file payload — give generous compose room
+      // rather than choking down to 15s fastIdleMs.
+      const preToolTransition = !pinned
+        && hasToolsPending
+        && !hasToolDeltas
+        && answerChars < 900
+        && /[.:!\n`]\s*$/.test(streamedAnswerText);
+      if (preToolTransition) {
+        stallBudget = Math.max(idleMs, 75_000);
+      } else {
+        stallBudget = fastStreamEstablished() ? fastIdleMs() : idleMs;
+      }
+    }
     resetStall();
   };
   const onCallerAbort = () => requestAbort.abort();
@@ -688,6 +753,7 @@ async function streamOpenAICompatible(options) {
     if (!response.ok) throw await readError(response, provider);
     if (!response.body) throw new Error('The provider returned no response stream.');
 
+    stallBudget = firstByteMs;
     resetStall();
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -756,13 +822,15 @@ async function streamOpenAICompatible(options) {
         }
       }
       if (typeof delta.content === 'string' && delta.content) {
+        answerChars += delta.content.length;
+        streamedAnswerText += delta.content;
         noteOutput('answer');
         if (waitNoticeTimer) { clearTimeout(waitNoticeTimer); waitNoticeTimer = null; }
         text += delta.content;
         onDelta(delta.content);
       }
       if (Array.isArray(delta.tool_calls)) {
-        noteOutput('answer');
+        noteOutput('tool');
         if (waitNoticeTimer) { clearTimeout(waitNoticeTimer); waitNoticeTimer = null; }
         for (const part of delta.tool_calls) {
           const index = part.index || 0;
@@ -796,15 +864,18 @@ async function streamOpenAICompatible(options) {
         const err = new Error(exhausted
           ? `${meta.name} (${model}) stalled: gave up after ${waited}s without a finished answer.`
           : sawAnswer
-            ? `${meta.name} (${model}) stalled: the answer went silent for ${Math.round(idleMs / 1000)}s.`
+            ? `${meta.name} (${model}) stalled: the answer went silent for ${Math.round((firedBudgetMs || stallBudget) / 1000)}s.`
             : reasoningChars > 0
-              ? `${meta.name} (${model}) stalled: ${reasoningChars} chars of reasoning, then ${waited}s with no answer.`
+              ? `${meta.name} (${model}) stalled: ${reasoningChars} chars of reasoning, then ${Math.round(waited / 1000)}s with no answer.`
               : `${meta.name} (${model}) stalled: no output after ${waited}s.`);
         err.status = 408;
         // `stall` tells the engine this is a model/host problem it can route
         // around — never a dead end and never a reason to cool the key down.
         err.stall = true;
         err.elapsedMs = Date.now() - streamStartAt;
+        err.ttfbMs = firstOutputAt ? firstOutputAt - streamStartAt : null;
+        err.partialText = text;
+        err.reasoningChars = reasoningChars;
         throw err;
       }
       if (signal?.aborted) throw new Error('Cancelled.');
@@ -842,7 +913,14 @@ async function streamOpenAICompatible(options) {
       throw err;
     }
 
-    return { text, toolCalls, usage, finishReason };
+    return {
+      text,
+      toolCalls,
+      usage,
+      finishReason,
+      ttfbMs: firstOutputAt ? firstOutputAt - streamStartAt : null,
+      elapsedMs: Date.now() - streamStartAt,
+    };
   } finally {
     if (stallTimer) clearTimeout(stallTimer);
     if (waitNoticeTimer) clearTimeout(waitNoticeTimer);

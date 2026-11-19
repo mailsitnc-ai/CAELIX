@@ -893,6 +893,7 @@ async function setup() {
     ask: requestPermission,
     askUser: requestQuestion,
     checkpointDir: path.join(userData(), 'checkpoints'),
+    userDataDir: userData(),
     claudePath: path.join(os.homedir(), '.local', 'bin', 'claude'),
     browser: () => browserPanel,
   });

@@ -1,5 +1,17 @@
 # CAELIX changelog
 
+## 0.1.46 — Universal model reliability: health memory, fast dead-host detection, parallel reads & zero-gap continuation
+
+- **Persistent model reliability memory (`src/engine/model-health.js`, `src/engine/index.js`, `src/main.js`, `src/cli.js`):**
+  - Tracks per-model completions, latency, and recent consecutive stalls in `<userData>/model-health.json` (no API keys stored). Models that stalled twice in 30 minutes start demoted automatically to a healthier sibling (or healthy alternate provider) at the start of the turn, and failover candidates rank by observed health + speed.
+- **No more crashed turns after partial intro text (`src/engine/index.js`, `src/engine/providers.js`):**
+  - Removed both the `!emitted` and `< 40`-char dead zones: ANY streamed intro text (`>= 1` char) before a mid-turn stall is preserved and handed to a healthy failover model with explicit instructions to continue executing pending tool calls (`write_file`/`edit_file`) seamlessly rather than stopping with `Failed · 47.9s`.
+  - Pre-tool-call transition pauses (e.g. a model emitting an intro plan right before buffering a large `write_file` JSON payload) no longer drop to `15s` `fastIdleMs` (`75s` compose window while awaiting the first tool delta), while genuinely hung prose streams fail over in ~15s and dead HTTP hosts that fail to return headers fail over in `30s` (`headersMs`) instead of `120s`.
+- **Faster & stronger failover across every provider (`src/engine/providers.js`, `src/engine/index.js`):**
+  - Reordered NVIDIA NIM failover to prioritize fast verified endpoints (`nemotron-3.5-lightning-30b-a3b`, `nemotron-3.5-super-vl-120b-a12b`, `nemotron-3.5-bolt-e4b`) ahead of heavy models like `poolside/laguna-xs-2.1`.
+  - Added `coarena` to `PROVIDER_SPILLOVER` (`gemini`, `coarena`, `nvidia`, `groq`, `openrouter`, `numes`, `kilo`), eliminated redundant 120s re-waits when a slow stall has no alternates, routed `runSubagent` through `callKeyed` for full stall/429 failover, and parallelized read-only tool batches (`read_file`, `list_dir`, `glob`, `grep`).
+- **Verification:** `npm run test:reliability` (`scripts/verify-reliability.js`), `npm run test:stall` (`scripts/verify-stall-failover.js`), `checks/verify_features.js`, `terminal-probe.js`, and `npm run selfcheck` all pass cleanly.
+
 ## 0.1.45 — A silent model can no longer end a turn
 
 - **Root cause, measured (`src/engine/providers.js`):** Kilo's `nvidia/nemotron-3-ultra-550b-a55b:free` streams ~10 reasoning deltas, then goes **completely silent for 72.6s** while it composes a 31,906-character `write_file` tool call, then emits the call at 74.8s. CAELIX used one `35s` watchdog for both "no first byte yet" and "stream went quiet mid-answer", so it aborted a perfectly healthy generation — and flagged the abort `noRetry`, which ended the turn with *"stalled for 35s without sending output. Try switching models."*

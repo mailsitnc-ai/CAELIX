@@ -219,6 +219,7 @@ async function run(args) {
     mcp,
     hooks,
     agents,
+    userDataDir: appSupport,
     ask: async (request) => {
       if (json) line({ type: 'permission', ...request, decision: args.yes ? 'allow' : 'deny' });
       else note(`permission ${args.yes ? 'granted' : 'denied'}: ${request.action} ${request.target}`);

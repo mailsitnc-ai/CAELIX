@@ -22,11 +22,18 @@ const CHAT_MAX_ROUNDS = 15;
 const CODE_MAX_ROUNDS = 50;
 const LAZY_MCP_THRESHOLD = 10;
 
+// Tools that only read the project. A model commonly asks for several reads
+// in one round, and running them one after another makes every round slower
+// than it needs to be. They are safe to run together because none of them
+// mutates the workspace.
+const PARALLEL_READ_TOOLS = new Set(['read_file', 'list_dir', 'glob', 'grep']);
+
 const PLAN_SAFE_TOOLS = new Set([
   'read_file', 'list_dir', 'glob', 'grep', 'skill', 'tool_search',
   'present_plan', 'ask_user', 'todo_write', 'subagent', 'task_list',
 ]);
 const { AgentRegistry } = require('./agents');
+const { ModelHealth } = require('./model-health');
 const { diffLines } = require('./diff');
 const outline = require('./outline');
 const { extractDesignGoals } = require('./design');
@@ -316,6 +323,21 @@ class Engine {
     this.chatMaxRounds = Number.isFinite(Number(options.chatMaxRounds)) ? Math.max(1, Number(options.chatMaxRounds)) : CHAT_MAX_ROUNDS;
     this.autoResetPercent = Number.isFinite(Number(options.autoResetPercent)) ? Number(options.autoResetPercent) : 70;
     this.autoResetTokens = Number.isFinite(Number(options.autoResetTokens)) ? Number(options.autoResetTokens) : 0;
+    this.userDataDir = options.userDataDir || null;
+    this.health = options.health
+      || (options.modelHealth === false ? null : new ModelHealth(this.userDataDir));
+  }
+
+  /**
+   * Remember how a model behaved so the next turn can start on one that
+   * finishes. Never throws: health is a hint, not a dependency.
+   */
+  recordModelHealth(provider, model, outcome) {
+    try {
+      this.health?.record(provider, model, outcome);
+    } catch {
+      /* ignore */
+    }
   }
 
   turnBudgetFor(session) {
@@ -458,7 +480,17 @@ class Engine {
         }
       }
     }
-    return out;
+    // A model that stalled twice recently is the worst possible next attempt,
+    // so the list is ordered by observed reliability instead of catalog order.
+    if (!this.health) return out;
+    const byHealth = (list) => [...list].sort(
+      (a, b) => this.health.score(b.provider, b.model) - this.health.score(a.provider, a.model),
+    );
+    return [
+      out[0],
+      ...byHealth(out.slice(1).filter((item) => item.tier === 'sibling-model')),
+      ...byHealth(out.slice(1).filter((item) => item.tier === 'cross-provider')),
+    ];
   }
 
   filterToolsForTurn(session, allTools) {
@@ -982,6 +1014,99 @@ class Engine {
           continue;
         }
 
+        // Independent reads are the most common multi-call round, and each one
+        // is pure filesystem work. Running them together turns the wait from
+        // the sum of every read into the slowest single read — the difference
+        // between four sequential reads and one round trip on a slow model.
+        const parallelReads = assistant.toolCalls.length > 1
+          && assistant.toolCalls.every((call) => PARALLEL_READ_TOOLS.has(call.name));
+        if (parallelReads) {
+          const blocked = new Map();
+          for (const call of assistant.toolCalls) {
+            emit({ type: 'tool-start', id: call.id, name: call.name, input: call.input });
+            if (this.hooks) {
+              const preHook = await this.hooks.run('PreToolUse', {
+                sessionId, cwd: session.cwd, tool: call.name, input: call.input,
+              });
+              if (preHook.blocked) blocked.set(call.id, preHook.reason);
+              else if (preHook.notes.length) {
+                emit({ type: 'hook-event', event: 'PreToolUse', tool: call.name, output: preHook.notes.map((n) => n.output).join('\n') });
+              }
+            }
+          }
+          const settled = await Promise.all(assistant.toolCalls.map(async (call) => {
+            const t0 = Date.now();
+            if (blocked.has(call.id)) return { call, error: new Error(blocked.get(call.id)), durationMs: Date.now() - t0 };
+            try {
+              const output = await runner.execute(call.name, call.input);
+              return { call, output, durationMs: Date.now() - t0 };
+            } catch (error) {
+              return { call, error, durationMs: Date.now() - t0 };
+            }
+          }));
+          for (const item of settled) {
+            const { call } = item;
+            if (item.error && (controller.signal.aborted || /Cancelled\./i.test(item.error.message))) throw item.error;
+            if (this.hooks) {
+              await this.hooks.run('PostToolUse', {
+                sessionId, cwd: session.cwd, tool: call.name, input: call.input,
+                ok: !item.error, output: String(item.error?.message || item.output?.output || '').slice(0, 4000),
+              }).catch(() => {});
+            }
+            const target = call.input?.path || call.input?.pattern || '';
+            if (item.error) {
+              stepsLog.push({ name: call.name, target: String(target), ok: false, durationMs: item.durationMs, detail: item.error.message });
+              emit({ type: 'tool-result', id: call.id, name: call.name, ok: false, output: item.error.message, durationMs: item.durationMs });
+              messages.push({
+                role: 'tool',
+                toolCallId: call.id,
+                content: `Error: ${item.error.message}`,
+                id: `tool_${call.id}`,
+                createdAt: Date.now(),
+              });
+              continue;
+            }
+            const output = item.output;
+            if (output.todos) {
+              todos = output.todos;
+              session.todos = output.todos;
+            }
+            stepsLog.push({ name: call.name, target: String(target), ok: true, durationMs: item.durationMs });
+            emit({
+              type: 'tool-result',
+              id: call.id,
+              name: call.name,
+              ok: true,
+              output: output.output,
+              meta: output.meta,
+              durationMs: item.durationMs,
+            });
+            messages.push({
+              role: 'tool',
+              toolCallId: call.id,
+              content: output.output,
+              id: `tool_${call.id}`,
+              createdAt: Date.now(),
+            });
+            if (output.imageDataUrl) {
+              messages.push({
+                role: 'user',
+                hidden: true,
+                content: `Image returned by ${call.name} (${call.input?.path || 'image'}).`,
+                attachments: [{
+                  name: call.input?.path || 'image',
+                  kind: 'image',
+                  mimeType: output.meta?.mimeType || 'image/png',
+                  dataUrl: output.imageDataUrl,
+                }],
+                id: `img_${call.id}`,
+                createdAt: Date.now(),
+              });
+            }
+          }
+          continue;
+        }
+
         const pendingImageMessages = [];
         for (const call of assistant.toolCalls) {
           if (controller.signal.aborted) throw new Error('Cancelled.');
@@ -1232,6 +1357,18 @@ class Engine {
       return { ok: true, summary, autoReset };
     } catch (error) {
       const wasCancelled = controller.signal.aborted || /Cancelled\./i.test(error.message);
+      if (error.partialText && String(error.partialText).trim()) {
+        const last = [...messages].reverse().find((m) => m.role === 'assistant');
+        if (!last || String(last.content || '') !== String(error.partialText)) {
+          messages.push({
+            role: 'assistant',
+            content: String(error.partialText),
+            toolCalls: [],
+            id: `msg_${Date.now()}_partial`,
+            createdAt: Date.now(),
+          });
+        }
+      }
       const summary = stepsLog.length || changes.length || wasCancelled || error
         ? buildTurnSummary({
           status: wasCancelled ? 'stopped' : 'failed',
@@ -1321,10 +1458,12 @@ class Engine {
     return true;
   }
 
-  async callKeyed({ session, messages, extraTools = [], disableTools = false, target = null, emit, signal }) {
+  async callKeyed({ session, messages, extraTools = [], toolsOverride = null, disableTools = false, target = null, emit, signal }) {
     let activeProviderId = target?.provider || session.provider;
     let activeModelId = normalizeModelForProvider(activeProviderId, target?.model || session.model);
-    const rawTools = disableTools ? [] : this.filterToolsForTurn(session, [...toolDefinitions(session.cwd), ...extraTools]);
+    const rawTools = disableTools
+      ? []
+      : this.filterToolsForTurn(session, Array.isArray(toolsOverride) ? toolsOverride : [...toolDefinitions(session.cwd), ...extraTools]);
     let emitted = false;
     let sleepAttempt = 0;
     let rotationCount = 0;
@@ -1334,6 +1473,47 @@ class Engine {
     let triedVisionSwitch = false;
     const triedTargets = new Set();
 
+    // Continuation: a model that streams half an answer and then dies must not
+    // throw that work away. The text already shown is carried into the next
+    // attempt so a sibling model finishes the same answer instead of starting
+    // over and leaving the user with an error.
+    let carriedText = '';
+    let continuationMessages = [];
+    let continuationCount = 0;
+
+    // A model that stalled twice in the last half hour starts demoted: use a
+    // healthier sibling for this turn instead of spending the stall budget
+    // again. The switch is reported, never silent.
+    if (this.health && this.autoFailover !== false && this.health.isDemoted(activeProviderId, activeModelId)) {
+      const currentScore = this.health.score(activeProviderId, activeModelId);
+      const targets = this.listFailoverTargets(activeProviderId, activeModelId);
+      const eligible = (candidate) => candidate.model !== activeModelId
+        && (candidate.provider !== activeProviderId || candidate.model !== activeModelId)
+        && this.pickKey(candidate.provider, candidate.model).poolSize > 0
+        && !this.pickKey(candidate.provider, candidate.model).allCooled
+        && this.health.score(candidate.provider, candidate.model) >= Math.max(50, currentScore + 10);
+      const better = targets.find((c) => c.provider === activeProviderId && eligible(c))
+        || targets.find((c) => c.provider !== activeProviderId && eligible(c));
+      if (better) {
+        const destLabel = better.provider === activeProviderId
+          ? better.model
+          : `${PROVIDERS[better.provider]?.name || better.provider} · ${better.model}`;
+        emit({
+          type: 'status',
+          stage: 'fallback',
+          provider: better.provider,
+          model: better.model,
+          message: `${PROVIDERS[activeProviderId]?.name || activeProviderId} (${activeModelId}) stalled repeatedly — starting this turn on ${destLabel} instead…`,
+        });
+        activeProviderId = better.provider;
+        activeModelId = better.model;
+        if (target) {
+          target.provider = better.provider;
+          target.model = better.model;
+        }
+      }
+    }
+
     for (;;) {
       const provider = PROVIDERS[activeProviderId];
       const pool = this.getKeyPool(activeProviderId);
@@ -1341,9 +1521,39 @@ class Engine {
       const activeSession = activeProviderId === session.provider && activeModelId === session.model
         ? session
         : { ...session, provider: activeProviderId, model: activeModelId };
-      const { messages: conversation, compacted } = this.buildConversation(activeSession, messages);
+      const { messages: built, compacted } = this.buildConversation(activeSession, messages);
+      const conversation = continuationMessages.length
+        ? [...built, ...continuationMessages]
+        : built;
       const picked = this.pickKey(activeProviderId, activeModelId);
-      let textOut = '';
+      const attemptStartedAt = Date.now();
+      // While a continued attempt repeats the text we already showed, stay
+      // silent; at the first difference, stream only the new part.
+      let attemptText = '';
+      let revealFrom = carriedText ? -1 : 0;
+      let revealed = 0;
+      const emitAttemptDelta = (delta) => {
+        attemptText += delta;
+        const carry = carriedText;
+        if (carry && revealFrom < 0) {
+          const limit = Math.min(attemptText.length, carry.length);
+          let common = 0;
+          while (common < limit && attemptText[common] === carry[common]) common += 1;
+          if (common >= carry.length) {
+            revealFrom = carry.length;
+          } else if (common < attemptText.length) {
+            revealFrom = common;
+          } else {
+            return; // still an exact prefix of the carried text
+          }
+        }
+        const visible = attemptText.slice(Math.max(0, revealFrom));
+        if (visible.length <= revealed) return;
+        const chunk = visible.slice(revealed);
+        revealed = visible.length;
+        emitted = true;
+        emit({ type: 'text', delta: chunk });
+      };
       try {
         const result = await streamOpenAICompatible({
           provider: activeProviderId,
@@ -1355,16 +1565,19 @@ class Engine {
           stripImages: stripImagesForTurn,
           signal,
           onStatus: (status) => emit({ type: 'status', ...status }),
-          onDelta: (delta) => {
-            textOut += delta;
-            emitted = true;
-            emit({ type: 'text', delta });
-          },
+          onDelta: emitAttemptDelta,
         });
-        result.text = result.text || textOut;
+        const raw = result.text || attemptText || '';
+        const fresh = revealFrom >= 0 ? raw.slice(revealFrom) : '';
+        result.text = `${carriedText}${fresh}`;
         result.compacted = compacted;
         result.provider = activeProviderId;
         result.model = activeModelId;
+        this.recordModelHealth(activeProviderId, activeModelId, {
+          ok: true,
+          elapsedMs: Date.now() - attemptStartedAt,
+          ttfbMs: result.ttfbMs,
+        });
         return result;
       } catch (error) {
         if (signal?.aborted) throw new Error('Cancelled.');
@@ -1456,8 +1669,26 @@ class Engine {
         const retryable = isRateLimit || status === 408 || status >= 500 || isNetworkFailure;
         const fast = process.env.CAELIX_FAST_RETRY === '1';
 
+        // Rate limits and auth errors describe the key, not the model, so they
+        // must not push a good model down the reliability list.
+        if (!isRateLimit && status !== 401 && status !== 403) {
+          this.recordModelHealth(activeProviderId, activeModelId, {
+            stall: isStall,
+            error: error.message,
+            elapsedMs: Date.now() - attemptStartedAt,
+          });
+        }
+
         const shouldFailoverNetwork = isNetworkFailure && (switchCount > 0 || sleepAttempt >= 1);
-        if ((isKeyAuthOrQuota || isNvidiaStall || isCoarenaUnavailable || isNumesUnavailable || isStall || isEmptyCompletion || isTurnOrderOrSignature400 || shouldFailoverNetwork) && !emitted) {
+        // A model that streamed part of an answer and then died still did real
+        // work. Keep that text, hand it to the next model and let it finish,
+        // instead of ending the turn with an error and a half-written reply.
+        const canContinueFromPartial = emitted
+          && attemptText.trim().length > 0
+          && continuationCount < 3
+          && (isStall || isEmptyCompletion || isNetworkFailure || status >= 500);
+        const canSwitch = !emitted || canContinueFromPartial;
+        if ((isKeyAuthOrQuota || isNvidiaStall || isCoarenaUnavailable || isNumesUnavailable || isStall || isEmptyCompletion || isTurnOrderOrSignature400 || shouldFailoverNetwork) && canSwitch) {
           const coolMs = fast ? 120 : (isRateLimit ? (error.retryAfterMs || 60_000) : 300_000);
           const scope = isRateLimit && MODEL_FAILOVER[activeProviderId] ? 'model' : 'key';
           // A stall, empty completion, network drop, schema/turn-order quirk, or single unavailable endpoint is a model/host problem, not a key problem: never cool the key down for it.
@@ -1467,7 +1698,7 @@ class Engine {
           }
 
           // Level 1: try another healthy key within the same provider first (not for model-wide issues or stalls)
-          if (!isModelOnlyIssue && pool.length > 1 && rotationCount < pool.length * 2) {
+          if (!emitted && !isModelOnlyIssue && pool.length > 1 && rotationCount < pool.length * 2) {
             const nextKey = this.pickKey(activeProviderId, activeModelId);
             if (!nextKey.allCooled) {
               rotationCount += 1;
@@ -1520,6 +1751,24 @@ class Engine {
               switchCount += 1;
               if (isStall) stallSwitches += 1;
               const prevLabel = `${provider.name} (${activeModelId})`;
+              if (canContinueFromPartial) {
+                // Text already on screen becomes the head of the answer, and
+                // the next model is told to finish that same reply.
+                const partial = revealFrom >= 0 ? attemptText.slice(revealFrom) : '';
+                carriedText = `${carriedText}${partial}`;
+                continuationCount += 1;
+                continuationMessages = [
+                  ...continuationMessages,
+                  { role: 'assistant', content: carriedText },
+                  {
+                    role: 'user',
+                    content: rawTools.length > 0
+                      ? '[CAELIX] The previous model stopped mid-turn right after the partial response above. Continue seamlessly from that exact point — execute any remaining tool calls (such as write_file or edit_file) needed to finish the task or complete any unfinished explanation, without repeating or rephrasing what is already written above.'
+                      : '[CAELIX] The previous model stopped mid-reply. Continue from the exact point where the text above ends. Do not repeat, rephrase or summarize what is already written — write only the remaining text. If the reply is already complete, add nothing and answer with an empty response.',
+                  },
+                ];
+                emitted = false;
+              }
               activeProviderId = nextCandidate.provider;
               activeModelId = nextCandidate.model;
               if (target) {
@@ -1532,11 +1781,13 @@ class Engine {
                 stage: 'fallback',
                 provider: nextCandidate.provider,
                 model: nextCandidate.model,
-                message: isEmptyCompletion
-                  ? `${prevLabel} returned an empty response — switched to ${PROVIDERS[nextCandidate.provider].name} (${nextCandidate.model}) so work continues…`
-                  : isStall
-                    ? `${prevLabel} went silent — switched to ${PROVIDERS[nextCandidate.provider].name} (${nextCandidate.model}) so work continues…`
-                    : `${prevLabel} hit ${status || 'limit'} — switched to ${PROVIDERS[nextCandidate.provider].name} (${nextCandidate.model}) so work continues…`,
+                message: canContinueFromPartial
+                  ? `${prevLabel} stopped mid-reply — continuing the same answer on ${PROVIDERS[nextCandidate.provider].name} (${nextCandidate.model})…`
+                  : isEmptyCompletion
+                    ? `${prevLabel} returned an empty response — switched to ${PROVIDERS[nextCandidate.provider].name} (${nextCandidate.model}) so work continues…`
+                    : isStall
+                      ? `${prevLabel} went silent — switched to ${PROVIDERS[nextCandidate.provider].name} (${nextCandidate.model}) so work continues…`
+                      : `${prevLabel} hit ${status || 'limit'} — switched to ${PROVIDERS[nextCandidate.provider].name} (${nextCandidate.model}) so work continues…`,
               });
               continue;
             }
@@ -1555,10 +1806,16 @@ class Engine {
             .some((t) => t.provider !== activeProviderId);
         const maxAttempts = isRateLimit ? (quotaEscape ? 1 : 5) : 2;
         // A stall already spent the whole pre-output budget. Once another model
-        // has been tried, retrying the silent one only doubles the wait; with
-        // no other model available, one retry is still better than giving up.
-        const stallExhausted = isStall && stallSwitches > 0;
+        // has been tried, or the single endpoint already hung >= 25s, retrying
+        // the same silent endpoint wastes minutes; fail cleanly instead.
+        const stallExhausted = isStall && (stallSwitches > 0 || (error.elapsedMs || 0) >= 25_000 || !canSwitch);
         if (!retryable || error.noRetry || emitted || stallExhausted || sleepAttempt >= maxAttempts) {
+          if (emitted || carriedText) {
+            // Never lose words the user already read: the partial reply is
+            // saved with the turn even when no model could finish it.
+            const partial = revealFrom >= 0 ? attemptText.slice(revealFrom) : '';
+            error.partialText = `${carriedText}${partial}`;
+          }
           if (stallExhausted) {
             error.message = `${error.message} CAELIX tried every eligible model for this turn — add a key for another provider in Keys, or try again in a moment.`;
           }
@@ -1626,31 +1883,21 @@ class Engine {
         { role: 'system', content: `${profile.prompt}\nWork strictly inside ${session.cwd}. Allowed tools: ${agentTools.map((t) => t.name).join(', ')}.` },
         { role: 'user', content: task },
       ];
+      const subTarget = { provider: session.provider, model: subModel };
+      const agentSession = { ...session, surface: 'code', mode: profile.readonly ? 'bypass' : session.mode };
       let rounds = 0;
       while (rounds < maxRounds) {
         rounds += 1;
-        let result = null;
-        for (let rot = 0; rot <= pool.length; rot += 1) {
-          const picked = this.pickKey(session.provider);
-          try {
-            result = await streamOpenAICompatible({
-              provider: session.provider,
-              model: subModel,
-              apiKey: picked.key,
-              messages: conversation,
-              tools: agentTools,
-              signal,
-              onDelta: () => {},
-            });
-            break;
-          } catch (err) {
-            if (Number(err.status) === 429 && pool.length > 1 && rot < pool.length) {
-              this.markKeyCooldown(session.provider, picked.index, err.retryAfterMs || 60_000);
-              continue;
-            }
-            throw err;
-          }
-        }
+        const result = await this.callKeyed({
+          session: agentSession,
+          messages: conversation,
+          toolsOverride: agentTools,
+          target: subTarget,
+          emit: (ev) => {
+            if (ev.type === 'status') emit({ type: 'subagent-event', parentId: call.id, tool: 'status', target: ev.message || '' });
+          },
+          signal,
+        });
         const normCalls = (result.toolCalls || []).map((c) => normalizeToolCall(c));
         if (!normCalls.length) {
           summary = result.text || '';
